@@ -1,0 +1,26 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Node
+web/node_modules/
+web/dist/
+
+# Postgres data volume (if ever bind-mounted)
+db/data/
+
+# OS
+.DS_Store
+
+# Eval / obs local artifacts
+eval/results/
+*.log

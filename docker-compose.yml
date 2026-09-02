@@ -1,0 +1,58 @@
+# Query Warden — local dev stack.
+# Postgres seeds itself from db/*.sql on first boot (docker-entrypoint-initdb.d
+# runs files in lexical order — hence the 00/01/02 prefixes below).
+services:
+  postgres:
+    image: postgres:18
+    container_name: querywarden-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: querywarden
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/00_schema.sql:/docker-entrypoint-initdb.d/00_schema.sql:ro
+      - ./db/01_seed.sql:/docker-entrypoint-initdb.d/01_seed.sql:ro
+      - ./db/02_roles.sql:/docker-entrypoint-initdb.d/02_roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d querywarden"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ./api
+    container_name: querywarden-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/querywarden
+      # The role the guarded pipeline actually queries as — see db/02_roles.sql.
+      CHATBOT_DATABASE_URL: postgresql://chatbot_ro:chatbot_ro@postgres:5432/querywarden
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./api:/app
+
+  web:
+    build: ./web
+    container_name: querywarden-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./web:/app
+      - /app/node_modules
+
+volumes:
+  pgdata:
