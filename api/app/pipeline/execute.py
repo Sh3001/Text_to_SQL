@@ -45,19 +45,37 @@ class ExecutionResult:
     duration_ms: float
 
 
-def _database_url() -> str:
+def chatbot_database_url() -> str:
     return os.environ.get("CHATBOT_DATABASE_URL", DEFAULT_CHATBOT_DATABASE_URL)
 
 
-def execute(safe_sql: str, tenant_id: int, database_url: str | None = None) -> ExecutionResult:
+def execute(
+    safe_sql: str,
+    tenant_id: int,
+    database_url: str | None = None,
+    statement_timeout_ms: int | None = None,
+) -> ExecutionResult:
     """`safe_sql` must already be guard.check()-approved — this function
     does not re-validate it. Never call this with raw model output.
+
+    `statement_timeout_ms` overrides chatbot_ro's role-level 15s default
+    (db/02_roles.sql) for this call only, scoped to the transaction (gone
+    on rollback) via set_config(..., true) — same reason app.tenant_id
+    below uses set_config rather than `SET LOCAL x = %s`: Postgres's SET
+    command doesn't accept a bind parameter at all (confirmed directly:
+    `SET LOCAL statement_timeout = %s` raises a syntax error on the `$1`
+    placeholder), while set_config is a normal parameterizable function
+    call. Exists so the timeout path (SQLSTATE 57014, see pipeline/
+    errors.py) can be tested deterministically in milliseconds instead of
+    a real test waiting out a real 15-second timeout.
     """
-    dsn = database_url or _database_url()
+    dsn = database_url or chatbot_database_url()
     with psycopg.connect(dsn) as conn:
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT set_config('app.tenant_id', %s, true)", (str(tenant_id),))
+                if statement_timeout_ms is not None:
+                    cur.execute("SELECT set_config('statement_timeout', %s, true)", (str(statement_timeout_ms),))
                 t0 = time.monotonic()
                 cur.execute(safe_sql)
                 rows = cur.fetchall()

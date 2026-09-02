@@ -8,6 +8,17 @@ parameter, verified against the actual running server — see the Phase 03
 build notes), not a hand-parsed convention: the model literally cannot
 emit a token sequence that violates SqlPlan's shape. Free-text parsing of
 a code fence was deliberately never on the table.
+
+Exceptions are a most-specific-first chain (the same principle the
+Anthropic SDK's NotFoundError/RateLimitError/APIStatusError/
+APIConnectionError chain follows, adapted to what Ollama actually raises
+— verified directly: an unreachable server raises a plain built-in
+ConnectionError, a missing/misspelled model raises ollama.ResponseError
+with status_code=404), because the pipeline needs to treat them
+differently: ModelUnavailableError means the environment is broken and
+retrying the same request won't help; OutputParseError means the model's
+own output was malformed, which the bounded repair loop (Phase 04) CAN
+usefully retry by feeding the parse error back.
 """
 
 from __future__ import annotations
@@ -15,6 +26,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import ollama
+from pydantic import ValidationError
 
 from .schemas import SqlPlan
 
@@ -22,11 +34,29 @@ DEFAULT_MODEL = "qwen2.5-coder:3b"
 
 
 class GenerationError(RuntimeError):
-    """The model produced text that doesn't parse as a SqlPlan, or the
-    Ollama server couldn't be reached. Distinguished from a GuardResult
-    rejection: this is a pipeline/infra failure, not a judgment about the
-    generated SQL — see pipeline/generate.py for how the two are handled
-    differently (this is not retried the same way a guard rejection is).
+    """Base for every failure this module raises. Catch this if you don't
+    need to distinguish; catch the subclasses below if you do.
+    """
+
+
+class ModelUnavailableError(GenerationError):
+    """The Ollama server isn't reachable, or the named model isn't
+    pulled. Not something a retry of the same request fixes — it needs an
+    operator (start the server, `ollama pull <model>`).
+    """
+
+
+class ModelResponseError(GenerationError):
+    """Ollama reached the model but something went wrong server-side
+    (a 5xx, a malformed request the server rejected). May be transient.
+    """
+
+
+class OutputParseError(GenerationError):
+    """The model produced text that doesn't parse/validate as SqlPlan.
+    Distinct from the two above: this is a retryable-via-regeneration
+    case (feed the parse error back as repair context), not an infra
+    problem — see pipeline/answer.py's repair loop.
     """
 
 
@@ -63,14 +93,24 @@ def generate(
             options={"temperature": temperature},
             keep_alive=keep_alive,
         )
-    except Exception as exc:  # ollama raises its own ResponseError/ConnectionError types
-        raise GenerationError(f"Ollama request failed: {exc}") from exc
+    except ConnectionError as exc:
+        raise ModelUnavailableError(
+            f"could not reach the Ollama server: {exc}. Is `ollama serve` running?"
+        ) from exc
+    except ollama.ResponseError as exc:
+        if exc.status_code == 404:
+            raise ModelUnavailableError(
+                f"model '{model}' isn't available (404). Try `ollama pull {model}`."
+            ) from exc
+        raise ModelResponseError(f"Ollama returned an error ({exc.status_code}): {exc}") from exc
+    except Exception as exc:  # noqa: BLE001 — last-resort catch-all, re-raised as our own typed error
+        raise ModelResponseError(f"unexpected failure calling Ollama: {exc}") from exc
 
     content = response.message.content
     try:
         plan = SqlPlan.model_validate_json(content)
-    except Exception as exc:
-        raise GenerationError(f"model output didn't validate as SqlPlan: {exc}\nraw: {content!r}") from exc
+    except ValidationError as exc:
+        raise OutputParseError(f"model output didn't validate as SqlPlan: {exc}\nraw: {content!r}") from exc
 
     return GenerationResult(
         plan=plan,

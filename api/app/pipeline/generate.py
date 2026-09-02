@@ -18,6 +18,7 @@ import psycopg
 
 from ..llm import client, prompts
 from ..llm.client import GenerationResult
+from ..llm.prompts import RepairAttempt
 from ..schema import introspect, render, semantic, value_index
 from ..schema.catalog import SnapshotCatalog
 from .hints import extract_value_hints
@@ -43,7 +44,12 @@ def build_context(conn: psycopg.Connection) -> PipelineContext:
     )
 
 
-def generate_plan(ctx: PipelineContext, question: str, model: str = client.DEFAULT_MODEL) -> GenerationResult:
+def generate_plan(
+    ctx: PipelineContext,
+    question: str,
+    model: str = client.DEFAULT_MODEL,
+    repair_attempts: list[RepairAttempt] | None = None,
+) -> GenerationResult:
     hints = extract_value_hints(question, ctx.value_index)
-    bundle = prompts.build_prompt(ctx.schema_ddl, question, hints)
+    bundle = prompts.build_prompt(ctx.schema_ddl, question, hints, repair_attempts)
     return client.generate(bundle.system, bundle.user, model=model)

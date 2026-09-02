@@ -41,6 +41,16 @@ how a business term was defined, a default time range.
 `tables_used`.
 - Prefer the canonical metric expressions given in the schema block \
 (e.g. for "revenue") over improvising your own.
+- Never join more than one child table that has a many-to-one \
+relationship to the same parent (order_items, refunds, payments, \
+shipments, reviews, campaign_events all relate to orders/customers this \
+way) directly in the same FROM clause and then SUM() across them. An \
+order with 3 order_items and 1 refund produces 3 joined rows, and \
+summing the refund amount across those 3 rows triples it — a real, \
+confirmed bug, not a hypothetical. Aggregate each child table to one row \
+per parent first (a CTE or subquery per child), THEN join those \
+single-row-per-parent aggregates together. This applies however you \
+arrive at the join, not just to the exact examples below.
 """
 
 FEW_SHOT_EXAMPLES = """\
@@ -96,6 +106,20 @@ Q: "How did we do last quarter?"
 
 
 @dataclass(frozen=True)
+class RepairAttempt:
+    """One prior failed attempt within the same question's bounded repair
+    loop (pipeline/answer.py) — the SQL that was tried and the concrete
+    reason it failed, whether that came from the guard (a syntax error, an
+    unknown identifier) or from Postgres itself (a real SQLSTATE and
+    position marker). Feeding the verbatim error back, rather than a
+    generic "try again", is the entire mechanism the repair loop relies on.
+    """
+
+    sql: str
+    error: str
+
+
+@dataclass(frozen=True)
 class PromptBundle:
     system: str
     user: str
@@ -113,16 +137,32 @@ def build_system_prompt(schema_ddl: str) -> str:
     )
 
 
-def build_user_message(question: str, value_hints: list[str] | None = None) -> str:
+def build_user_message(
+    question: str,
+    value_hints: list[str] | None = None,
+    repair_attempts: list[RepairAttempt] | None = None,
+) -> str:
     parts = [f"Q: {question}"]
     if value_hints:
         parts.append("\nResolved value hints (use these exact values, not the literal the user typed):")
         parts.extend(f"- {hint}" for hint in value_hints)
+    if repair_attempts:
+        parts.append(
+            "\nYour previous attempt(s) at this question failed. Fix the "
+            "specific problem named in the error — don't just rephrase the same mistake."
+        )
+        for i, attempt in enumerate(repair_attempts, 1):
+            parts.append(f"\nAttempt {i} SQL:\n{attempt.sql}\nAttempt {i} error:\n{attempt.error}")
     return "\n".join(parts)
 
 
-def build_prompt(schema_ddl: str, question: str, value_hints: list[str] | None = None) -> PromptBundle:
+def build_prompt(
+    schema_ddl: str,
+    question: str,
+    value_hints: list[str] | None = None,
+    repair_attempts: list[RepairAttempt] | None = None,
+) -> PromptBundle:
     return PromptBundle(
         system=build_system_prompt(schema_ddl),
-        user=build_user_message(question, value_hints),
+        user=build_user_message(question, value_hints, repair_attempts),
     )

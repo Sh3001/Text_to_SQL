@@ -7,7 +7,7 @@ see the design doc (published separately as an Artifact).
 
 ## Status
 
-**Phases 00 through 03 are complete and verified against a live database and
+**Phases 00 through 04 are complete and verified against a live database and
 a live model — not just written.**
 
 - `db/00_schema.sql` — the analytics schema: 14 base tables, 14 chatbot-facing
@@ -27,8 +27,20 @@ a live model — not just written.**
 - `api/app/llm/` + `api/app/pipeline/` — generation, guard, execution,
   wired end to end. **Runs on a local Ollama model, not Claude** — see
   "Why Ollama" below.
-- 183 tests total: guard/schema tests run with no DB and no model; live-DB
+- `api/app/pipeline/plan_budget.py` — layer 3 of the defense stack (EXPLAIN
+  before execute), missing after Phase 03 and added in Phase 04 — read-only
+  isn't the same as safe.
+- `api/app/pipeline/diagnose.py` — the zero-row selectivity diagnostic:
+  re-runs a query's WHERE-clause predicates cumulatively (built from the
+  AST, not string surgery) and names the exact one that emptied the result.
+- `api/app/pipeline/answer.py` + `errors.py` — the full error taxonomy from
+  the design doc and the bounded (two-attempt) repair loop: every failure
+  is classified once and handled by exactly the action its class calls for
+  — ask, repair, block, diagnose, or give up.
+- 199 tests total: guard/schema tests run with no DB and no model; live-DB
   and live-model integration tests skip cleanly when either is unavailable.
+  Every row of the error taxonomy has a test that provokes it and asserts
+  the recovery (`api/tests/test_answer_repair_loop.py`).
 
 ### Why Ollama, not Claude
 
@@ -62,12 +74,54 @@ to define; the guard's catalog check caught the resulting unknown-table
 reference and offered real "did you mean" suggestions rather than letting
 broken SQL reach the database), and **1 failed at execution** (the model
 queried `v_orders.amount`, which doesn't exist — a plain generation
-mistake). Both non-clarification failures are exactly what Phase 04's
-bounded repair loop exists to fix: feed the real Postgres/guard error back
-for one retry. A caught-and-rejected mistake or a loudly failed query is
-the correct outcome for a small local model's misfire — the alternative,
-a confidently wrong number, is the one failure mode this whole project
-exists to prevent, and it didn't happen once across the 20 questions.
+mistake).
+
+### Phase 04 checkpoint — same 20 questions, now with the repair loop
+
+Re-run against the same file after Phase 04 landed: **19 answered, 1
+correctly asked for clarification, 0 blocked, 0 failed, 0 gave up.** Both
+Phase 03 failures were the exact two questions that needed the repair
+loop — each took its full 2 attempts and both recovered, with the real
+Postgres/guard error fed back verbatim rather than a generic "try again".
+
+**The honest part.** While re-verifying one of those two recoveries
+("What is our net revenue by region?"), the model's second repair attempt
+produced SQL that passed the guard, passed the plan-budget check, and
+executed cleanly with plausible-looking non-zero numbers — and was wrong.
+It joined `v_order_items` and `v_refunds` directly to the same `v_orders`
+row instead of pre-aggregating each first, which is exactly the fan-out
+double-counting bug fixed in `semantic/catalog.yml` during Phase 03, just
+reintroduced through a different SQL shape the earlier fix didn't cover.
+Checked against a known-correct pre-aggregated version of the same
+question: `total_refunds` came out roughly **3x too high** in every
+region. Nothing in the pipeline caught it, because nothing *can* — nothing
+about that query is unsafe, slow, or malformed; it's just semantically
+wrong in a way only a human (or a golden-answer eval) can catch. That's
+exactly the "valid but wrong" row in the error taxonomy below, which the
+design doc already says isn't automatically detectable — this is what
+that sentence means in practice, not a hypothetical. The one mitigation
+that's actually in scope for this phase — a general hard rule in the
+system prompt against joining more than one many-to-one child table
+directly and summing across it, rather than just the one example that was
+there before — was added and re-verified: three follow-up runs of the
+same question all correctly pre-aggregated in a subquery afterward. A
+prompt change reduces how often this happens; it does not make the class
+of bug impossible, and nothing in this architecture claims otherwise.
+Phase 05's golden-answer eval harness is where this stops being "probably
+fixed" and becomes a measured number.
+
+| Failure | Action | Test |
+|---|---|---|
+| Ambiguous question | ask | `test_ambiguous_question_asks_instead_of_guessing` |
+| Unknown table/column | repair | `test_unknown_table_is_repaired_with_the_real_error_fed_back` |
+| Syntax error | repair | `test_guard_level_syntax_error_is_repaired` |
+| Unsafe statement | block, terminal | `test_unsafe_statement_is_blocked_not_repaired` |
+| Over plan budget | repair | `test_over_budget_query_is_repaired` |
+| Timeout | ask, never retried | `test_timeout_asks_and_does_not_retry` |
+| Zero rows | diagnose | `test_zero_rows_triggers_diagnosis_naming_the_culprit_predicate` |
+| Model unavailable | give up, no retry | `test_model_unavailable_gives_up_without_retrying` |
+| Model output unparseable | repair | `test_unparseable_model_output_is_repaired` |
+| Valid but wrong | *(not automatically detectable — see above)* | — |
 
 ## Quickstart
 
@@ -103,7 +157,7 @@ psql -U chatbot_ro -h localhost -d querywarden -c "SET app.tenant_id='1'; SELECT
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 cd api && ../.venv/bin/python -m pytest -v
-# 183 passed. Guard/schema-fixture tests always run; live-DB and
+# 199 passed. Guard/schema-fixture tests always run; live-DB and
 # live-Ollama integration tests skip cleanly if either isn't reachable.
 ```
 
@@ -131,5 +185,7 @@ column reference.
 
 ## Next
 
-Phase 04 (error taxonomy, the bounded repair loop, zero-row diagnosis) and
-beyond are in the design doc.
+Phase 05 (the golden-answer eval harness — execution-accuracy grading, the
+adversarial CI gate, and the number that turns "the fan-out mitigation
+seems to help" into a measured, tracked metric) and beyond are in the
+design doc.

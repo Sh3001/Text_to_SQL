@@ -1,110 +1,67 @@
-"""The Phase 03 checkpoint driver: generate -> guard -> execute, for one
-question or a file of them, printed for human inspection. Not the eval
-harness (Phase 05, which grades against golden answers) — this is the
-"twenty hand-written questions answered end to end" checkpoint from the
-project plan, meant to be read, not asserted on.
+"""CLI driver for the generate -> guard -> budget -> execute -> diagnose
+loop (pipeline/answer.py). Used for both the Phase 03 checkpoint (twenty
+hand-written questions) and Phase 04's error-taxonomy verification —
+prints enough of the outcome to see which action fired and why, without
+being the eval harness (Phase 05, which grades against golden answers).
 """
 
 from __future__ import annotations
 
 import argparse
 import os
-import sys
-import time
-from dataclasses import dataclass
 
 import psycopg
 
-from ..guards import ast_guard
-from ..guards.errors import RejectReason
-from ..llm.client import GenerationError, GenerationResult
-from ..llm.schemas import SqlPlan
-from .execute import ExecutionError, ExecutionResult, execute
-from .generate import PipelineContext, build_context, generate_plan
+from .answer import AnswerOutcome, answer
+from .errors import Action
+from .generate import build_context
 
 DEFAULT_DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/querywarden"
 )
 
 
-@dataclass
-class Outcome:
-    question: str
-    generation: GenerationResult | None
-    guard: ast_guard.GuardResult | None
-    execution: ExecutionResult | None
-    error: str | None
-    wall_ms: float
-
-
-def answer(ctx: PipelineContext, question: str, tenant_id: int = 1, model: str | None = None) -> Outcome:
-    t0 = time.monotonic()
-    try:
-        gen = generate_plan(ctx, question, model=model) if model else generate_plan(ctx, question)
-    except GenerationError as exc:
-        return Outcome(question, None, None, None, str(exc), (time.monotonic() - t0) * 1000)
-
-    plan = gen.plan
-    if plan.needs_clarification:
-        return Outcome(question, gen, None, None, None, (time.monotonic() - t0) * 1000)
-
-    guard_result = ast_guard.check(plan.sql, catalog=ctx.catalog)
-    if not guard_result.ok:
-        return Outcome(question, gen, guard_result, None, None, (time.monotonic() - t0) * 1000)
-
-    try:
-        exec_result = execute(guard_result.safe_sql, tenant_id=tenant_id)
-    except ExecutionError as exc:
-        return Outcome(question, gen, guard_result, None, str(exc), (time.monotonic() - t0) * 1000)
-
-    return Outcome(question, gen, guard_result, exec_result, None, (time.monotonic() - t0) * 1000)
-
-
-def _print_outcome(o: Outcome) -> None:
+def _print_outcome(o: AnswerOutcome) -> None:
     print(f"\n{'=' * 78}")
     print(f"Q: {o.question}")
     print(f"{'-' * 78}")
-    if o.generation is None:
-        print(f"GENERATION FAILED: {o.error}")
-        return
 
-    plan: SqlPlan = o.generation.plan
-    print(f"intent:       {plan.intent}")
-    if plan.assumptions:
-        print(f"assumptions:  {'; '.join(plan.assumptions)}")
-    print(f"confidence:   {plan.confidence}")
+    if o.plan is not None:
+        print(f"intent:       {o.plan.intent}")
+        if o.plan.assumptions:
+            print(f"assumptions:  {'; '.join(o.plan.assumptions)}")
+        print(f"confidence:   {o.plan.confidence}")
 
-    if plan.needs_clarification:
-        print(f"CLARIFY:      {plan.clarifying_question}")
-        return
+    print(f"verdict:      {o.verdict.value}"
+          + (f"  ({o.failure_kind.value})" if o.failure_kind else "")
+          + (f"  [{o.repair_attempts_used} repair attempt(s)]" if o.repair_attempts_used else ""))
 
-    print(f"tables_used:  {', '.join(plan.tables_used) or '(none)'}")
-    print(f"sql (model):  {plan.sql}")
-
-    if o.guard is None:
-        return
-    if not o.guard.ok:
-        marker = "TERMINAL" if o.guard.terminal else "repairable"
-        print(f"GUARD REJECTED [{marker}]: {o.guard.reason} — {o.guard.detail}")
-        return
-
-    print(f"sql (safe):   {o.guard.safe_sql}")
-
-    if o.error:
-        print(f"EXECUTION FAILED: {o.error}")
-        return
-    if o.execution is not None:
+    if o.verdict is Action.ANSWERED:
+        print(f"sql:          {o.last_sql}")
         print(f"rows:         {o.execution.row_count}  ({o.execution.duration_ms:.0f}ms)")
         for row in o.execution.rows[:5]:
             print(f"  {row}")
         if o.execution.row_count > 5:
             print(f"  ... ({o.execution.row_count - 5} more)")
-    print(f"wall time:    {o.wall_ms:.0f}ms  "
-          f"(model: {o.generation.prompt_eval_count}p+{o.generation.eval_count}e tokens)")
+    elif o.verdict is Action.ASK:
+        print(f"ASK:          {o.message}")
+    elif o.verdict is Action.BLOCK:
+        print(f"sql:          {o.last_sql}")
+        print(f"BLOCKED:      {o.message}")
+    elif o.verdict is Action.DIAGNOSE:
+        print(f"sql:          {o.last_sql}")
+        print(f"ZERO ROWS:    {o.message}")
+        if o.diagnosis:
+            for check in o.diagnosis.checks:
+                marker = " <-- likely culprit" if check.predicate_sql == o.diagnosis.culprit else ""
+                print(f"  {check.predicate_sql:50} -> {check.cumulative_row_count} rows{marker}")
+    elif o.verdict is Action.GIVE_UP:
+        print(f"sql:          {o.last_sql}")
+        print(f"GAVE UP:      {o.message}")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Query Warden — generate/guard/execute CLI")
+    parser = argparse.ArgumentParser(description="Query Warden — generate/guard/budget/execute/diagnose CLI")
     parser.add_argument("question", nargs="?", help="A single question. Omit to use --file.")
     parser.add_argument("--file", help="Path to a file of newline-separated questions.")
     parser.add_argument("--tenant-id", type=int, default=1)
@@ -128,12 +85,11 @@ def main() -> None:
         outcomes.append(o)
 
     if len(outcomes) > 1:
-        ok = sum(1 for o in outcomes if o.execution is not None)
-        clarified = sum(1 for o in outcomes if o.generation and o.generation.plan.needs_clarification)
-        blocked = sum(1 for o in outcomes if o.guard is not None and not o.guard.ok)
-        failed = sum(1 for o in outcomes if o.error is not None)
-        print(f"\n{'=' * 78}\n{ok} executed, {clarified} clarified, {blocked} guard-blocked, "
-              f"{failed} failed — of {len(outcomes)} total")
+        counts: dict[str, int] = {}
+        for o in outcomes:
+            counts[o.verdict.value] = counts.get(o.verdict.value, 0) + 1
+        summary = ", ".join(f"{n} {v}" for v, n in sorted(counts.items()))
+        print(f"\n{'=' * 78}\n{summary} — of {len(outcomes)} total")
 
 
 if __name__ == "__main__":
