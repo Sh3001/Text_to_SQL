@@ -199,7 +199,14 @@ class _SemanticWalker(Visitor):
                     node.relname,
                 )
             )
-        elif self.catalog is not None and schema is None:
+        elif self.catalog is not None and (schema is None or schema == "analytics"):
+            # Generated SQL may or may not schema-qualify — chatbot_ro's
+            # search_path is pinned to analytics (db/02_roles.sql), so both
+            # `v_orders` and `analytics.v_orders` are the same relation and
+            # both deserve a catalog check. Anything qualified with some
+            # OTHER schema isn't this branch's concern (see SnapshotCatalog
+            # .has_relation): it's either already caught by the schema
+            # denylist above, or will fail at execution for lack of grants.
             if not self.catalog.has_relation(schema, node.relname):
                 suggestions = self.catalog.nearest_relations(node.relname)
                 hint = f" — did you mean: {', '.join(suggestions)}?" if suggestions else ""

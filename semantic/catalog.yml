@@ -1,0 +1,133 @@
+# Query Warden — semantic layer.
+#
+# The one artifact a domain expert can review without reading Python. Every
+# entry here exists to prevent one specific, real wrong-answer class listed
+# in the project plan's schema-intelligence table. This file is rendered
+# into the model's system prompt ahead of the introspected DDL (see
+# api/app/llm/prompts, Phase 03) and is small enough to hand-maintain.
+
+glossary:
+  active_customer:
+    definition: >
+      A customer row where is_deleted = false. "Active" here means "not
+      soft-deleted" (churned or GDPR-erased), not "purchased recently" —
+      use a join against v_orders.ordered_at for recency questions instead.
+    sql_hint: "is_deleted = false"
+
+  revenue:
+    definition: >
+      Gross order value MINUS refunds, in the order's own currency. Never
+      sum v_order_items.unit_price * quantity alone and call it revenue —
+      that ignores discount_pct and every refund. See metrics.net_revenue
+      for the canonical expression.
+    warning: >
+      Amounts across different orders are NOT directly summable unless you
+      first group by currency — v_orders.currency varies per order and
+      there is no implicit conversion anywhere in this schema.
+
+  order_date:
+    definition: >
+      Ambiguous on its own. v_orders.ordered_at is the business event
+      (when the customer placed the order) and is almost always what a
+      question about "when an order happened" means. v_orders.created_at
+      is the row's insert timestamp and lags ordered_at by up to ~40 hours
+      — see deprecations below.
+
+# ---------------------------------------------------------------------------
+# Canonical metric SQL — the expression to reach for, not just a definition.
+# A generator that already has the right fragment is far less likely to
+# improvise a wrong one.
+# ---------------------------------------------------------------------------
+
+metrics:
+  gross_order_value:
+    sql: "SUM(oi.quantity * oi.unit_price * (1 - oi.discount_pct / 100.0))"
+    requires_join: [v_orders, v_order_items]
+    grain: "per order, before refunds"
+
+  net_revenue:
+    sql: >
+      SUM(oi.quantity * oi.unit_price * (1 - oi.discount_pct / 100.0))
+      - COALESCE((SELECT SUM(r.amount) FROM analytics.v_refunds r WHERE r.order_id = o.id), 0)
+    requires_join: [v_orders, v_order_items, v_refunds]
+    grain: "per order, refunds subtracted — this is what 'revenue' means unqualified"
+
+  refund_rate:
+    sql: "COUNT(DISTINCT r.order_id)::numeric / NULLIF(COUNT(DISTINCT o.id), 0)"
+    requires_join: [v_orders, v_refunds]
+
+  average_order_value:
+    sql: "AVG(order_total)"
+    note: "compute order_total per-order first (grouped subquery/CTE), then average — averaging line items directly double-weights multi-item orders"
+
+# ---------------------------------------------------------------------------
+# Blessed join paths — the FK graph already gives the model this, but
+# ambiguous cases (a table reachable two ways) are worth being explicit
+# about rather than leaving to chance.
+# ---------------------------------------------------------------------------
+
+join_paths:
+  order_to_customer: "v_orders.customer_id -> v_customers.id"
+  order_to_items: "v_orders.id -> v_order_items.order_id"
+  item_to_product: "v_order_items.product_id -> v_products.id"
+  order_to_refunds: "v_orders.id -> v_refunds.order_id  (LEFT JOIN — most orders have none)"
+  order_to_payments: "v_orders.id -> v_payments.order_id  (LEFT JOIN — a pending order may have no successful payment yet)"
+  customer_to_campaign_events: "v_customers.id -> v_campaign_events.customer_id"
+  product_to_inventory: "v_products.id -> v_inventory.product_id  (then filter warehouse_id if a specific location is asked about)"
+
+# ---------------------------------------------------------------------------
+# Deprecated / forbidden — surfaced to the model as hard "don't"s, not
+# suggestions. legacy_orders_flat isn't even granted to chatbot_ro (see
+# db/02_roles.sql), so this entry can't be bypassed by the model deciding
+# to ignore it — it's redundant with the grant by design, the way the plan
+# describes defense in depth: this line stops the model from ever
+# *proposing* the table (a confused intent it can't act on), the missing
+# grant is what stops it from *reaching* the table if it tries anyway.
+# ---------------------------------------------------------------------------
+
+deprecated:
+  - object: "analytics.legacy_orders_flat"
+    reason: >
+      Pre-2019 denormalized export, not maintained since. status_code is
+      an undocumented integer with no lookup table. total_amount is
+      rounded to whole currency units. Not queryable by this pipeline —
+      never granted to chatbot_ro — but named here so a model that
+      encounters it in training data or documentation still refuses to
+      propose it.
+    use_instead: "v_orders joined to v_order_items"
+
+  - object: "v_orders.created_at"
+    reason: "Row insert time, not the business event — see glossary.order_date."
+    use_instead: "v_orders.ordered_at"
+
+# ---------------------------------------------------------------------------
+# Value synonyms — NOT the same problem as the value index's fuzzy typo
+# matching (api/app/schema/value_index.py). Trigram/edit-distance
+# similarity solves "shipped" vs "Shipped" or "califronia" vs "california"
+# — nearby strings. It does NOT solve "California" -> "CA": those two
+# strings share almost no substring overlap, so no similarity metric finds
+# them close. That's a semantic abbreviation, not a typo, and needs an
+# explicit map. This is the literal fix for the exact trap the seed data
+# and the plan both call out.
+# ---------------------------------------------------------------------------
+
+value_synonyms:
+  "analytics.v_customers.state":
+    california: "CA"
+    "new york": "NY"
+    texas: "TX"
+    washington: "WA"
+    massachusetts: "MA"
+    illinois: "IL"
+    florida: "FL"
+    colorado: "CO"
+  "analytics.v_customers.country":
+    "united states": "US"
+    "usa": "US"
+    canada: "CA"
+    "united kingdom": "GB"
+    uk: "GB"
+    germany: "DE"
+    france: "FR"
+    japan: "JP"
+    australia: "AU"
