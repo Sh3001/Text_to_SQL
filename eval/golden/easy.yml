@@ -1,0 +1,80 @@
+- id: count_all_orders
+  question: How many orders are there in total?
+  sql: SELECT count(*) FROM analytics.v_orders
+  difficulty: easy
+- id: count_all_customers
+  question: How many customers do we have?
+  sql: SELECT count(*) FROM analytics.v_customers
+  difficulty: easy
+- id: count_all_products
+  question: How many products are in the catalog?
+  sql: SELECT count(*) FROM analytics.v_products
+  difficulty: easy
+- id: orders_by_status
+  question: How many orders are there for each status?
+  sql: SELECT status, count(*) FROM analytics.v_orders GROUP BY status ORDER BY status
+  difficulty: easy
+- id: customers_by_country
+  question: How many customers are in each country?
+  sql: SELECT country, count(*) FROM analytics.v_customers GROUP BY country ORDER BY country
+  difficulty: easy
+- id: customers_by_region
+  question: Break down customers by region.
+  sql: SELECT region, count(*) FROM analytics.v_customers GROUP BY region ORDER BY region
+  difficulty: easy
+- id: distinct_statuses
+  question: What are the distinct order statuses?
+  sql: SELECT DISTINCT status FROM analytics.v_orders ORDER BY status
+  difficulty: easy
+- id: distinct_currencies
+  question: What currencies do we use for orders?
+  sql: SELECT DISTINCT currency FROM analytics.v_orders ORDER BY currency
+  difficulty: easy
+- id: avg_product_price
+  question: What is the average product price?
+  sql: SELECT avg(unit_price_usd) FROM analytics.v_products
+  difficulty: easy
+- id: max_product_price
+  question: What is the most expensive product's price?
+  sql: SELECT max(unit_price_usd) FROM analytics.v_products
+  difficulty: easy
+- id: min_product_price
+  question: What is the cheapest product's price?
+  sql: SELECT min(unit_price_usd) FROM analytics.v_products
+  difficulty: easy
+- id: tickets_by_status
+  question: How many support tickets are in each status?
+  sql: SELECT status, count(*) FROM analytics.v_support_tickets GROUP BY status ORDER BY status
+  difficulty: easy
+- id: events_by_type
+  question: How many campaign events are there of each type?
+  sql: SELECT event_type, count(*) FROM analytics.v_campaign_events GROUP BY event_type ORDER BY event_type
+  difficulty: easy
+- id: count_warehouses
+  question: How many warehouses do we have?
+  sql: SELECT count(*) FROM analytics.v_warehouses
+  difficulty: easy
+- id: count_categories
+  question: How many product categories are there?
+  sql: SELECT count(*) FROM analytics.v_categories
+  difficulty: easy
+- id: total_inventory
+  question: What's the total quantity on hand across all inventory?
+  sql: SELECT sum(qty_on_hand) FROM analytics.v_inventory
+  difficulty: easy
+- id: count_reviews
+  question: How many reviews have been left?
+  sql: SELECT count(*) FROM analytics.v_reviews
+  difficulty: easy
+- id: avg_rating
+  question: What is the average review rating overall?
+  sql: SELECT avg(rating) FROM analytics.v_reviews
+  difficulty: easy
+- id: campaigns_by_channel
+  question: How many marketing campaigns per channel?
+  sql: SELECT channel, count(*) FROM analytics.v_marketing_campaigns GROUP BY channel ORDER BY channel
+  difficulty: easy
+- id: count_shipments
+  question: How many shipments have there been?
+  sql: SELECT count(*) FROM analytics.v_shipments
+  difficulty: easy

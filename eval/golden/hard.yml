@@ -1,0 +1,150 @@
+- id: net_revenue_by_region
+  question: What is our net revenue by region?
+  sql: |-
+    WITH order_totals AS (
+    SELECT oi.order_id, sum(oi.quantity * oi.unit_price * (1 - oi.discount_pct/100.0)) AS gross
+    FROM analytics.v_order_items oi GROUP BY oi.order_id
+    ), order_refunds AS (
+    SELECT r.order_id, sum(r.amount) AS refunded FROM analytics.v_refunds r GROUP BY r.order_id
+    )
+    SELECT c.region, sum(ot.gross - COALESCE(orf.refunded, 0)) AS net_revenue
+    FROM analytics.v_orders o
+    JOIN order_totals ot ON ot.order_id = o.id
+    LEFT JOIN order_refunds orf ON orf.order_id = o.id
+    JOIN analytics.v_customers c ON c.id = o.customer_id
+    GROUP BY c.region ORDER BY net_revenue DESC
+  difficulty: hard
+- id: top5_products_net_revenue
+  question: What are the top 5 products by net revenue after refunds?
+  sql: |-
+    WITH item_gross AS (
+    SELECT oi.order_id, oi.product_id, oi.quantity * oi.unit_price * (1 - oi.discount_pct/100.0) AS gross
+    FROM analytics.v_order_items oi
+    ), order_refund_ratio AS (
+    SELECT o.id AS order_id,
+    COALESCE(r.refunded, 0) / NULLIF(ot.gross_total, 0) AS refund_frac
+    FROM analytics.v_orders o
+    JOIN (SELECT order_id, sum(quantity*unit_price*(1-discount_pct/100.0)) AS gross_total
+    FROM analytics.v_order_items GROUP BY order_id) ot ON ot.order_id = o.id
+    LEFT JOIN (SELECT order_id, sum(amount) AS refunded FROM analytics.v_refunds GROUP BY order_id) r
+    ON r.order_id = o.id
+    )
+    SELECT p.name, sum(ig.gross * (1 - COALESCE(rr.refund_frac, 0))) AS net_revenue
+    FROM item_gross ig
+    JOIN analytics.v_products p ON p.id = ig.product_id
+    JOIN order_refund_ratio rr ON rr.order_id = ig.order_id
+    GROUP BY p.name ORDER BY net_revenue DESC LIMIT 5
+  difficulty: hard
+- id: net_revenue_last_year_by_month
+  question: What was net revenue by month over the last year?
+  sql: |-
+    WITH order_totals AS (
+    SELECT oi.order_id, sum(oi.quantity * oi.unit_price * (1 - oi.discount_pct/100.0)) AS gross
+    FROM analytics.v_order_items oi GROUP BY oi.order_id
+    ), order_refunds AS (
+    SELECT r.order_id, sum(r.amount) AS refunded FROM analytics.v_refunds r GROUP BY r.order_id
+    )
+    SELECT date_trunc('month', o.ordered_at) AS month, sum(ot.gross - COALESCE(orf.refunded,0)) AS net_revenue
+    FROM analytics.v_orders o
+    JOIN order_totals ot ON ot.order_id = o.id
+    LEFT JOIN order_refunds orf ON orf.order_id = o.id
+    WHERE o.ordered_at >= now() - interval '1 year'
+    GROUP BY month ORDER BY month
+  difficulty: hard
+- id: customers_never_reviewed
+  question: How many customers have never left a review?
+  sql: |-
+    SELECT count(*) FROM analytics.v_customers c
+    WHERE NOT EXISTS (SELECT 1 FROM analytics.v_reviews r WHERE r.customer_id = c.id)
+  difficulty: hard
+- id: products_never_reviewed
+  question: How many products have never been reviewed?
+  sql: |-
+    SELECT count(*) FROM analytics.v_products p
+    WHERE NOT EXISTS (SELECT 1 FROM analytics.v_reviews r WHERE r.product_id = p.id)
+  difficulty: hard
+- id: revenue_created_vs_ordered_trap
+  question: What was our net revenue last month?
+  sql: |-
+    WITH order_totals AS (
+    SELECT oi.order_id, sum(oi.quantity * oi.unit_price * (1 - oi.discount_pct/100.0)) AS gross
+    FROM analytics.v_order_items oi GROUP BY oi.order_id
+    ), order_refunds AS (
+    SELECT r.order_id, sum(r.amount) AS refunded FROM analytics.v_refunds r GROUP BY r.order_id
+    )
+    SELECT sum(ot.gross - COALESCE(orf.refunded, 0))
+    FROM analytics.v_orders o
+    JOIN order_totals ot ON ot.order_id = o.id
+    LEFT JOIN order_refunds orf ON orf.order_id = o.id
+    WHERE o.ordered_at >= date_trunc('month', now()) - interval '1 month'
+    AND o.ordered_at < date_trunc('month', now())
+  difficulty: hard
+- id: refund_rate_by_category
+  question: What's the refund rate by product category?
+  sql: |-
+    WITH order_has_refund AS (
+    SELECT DISTINCT order_id FROM analytics.v_refunds
+    )
+    SELECT c.name,
+    count(DISTINCT oi.order_id) FILTER (WHERE ohr.order_id IS NOT NULL)::numeric
+    / NULLIF(count(DISTINCT oi.order_id), 0) AS refund_rate
+    FROM analytics.v_order_items oi
+    JOIN analytics.v_products p ON p.id = oi.product_id
+    JOIN analytics.v_categories c ON c.id = p.category_id
+    LEFT JOIN order_has_refund ohr ON ohr.order_id = oi.order_id
+    GROUP BY c.name ORDER BY c.name
+  difficulty: hard
+- id: mom_order_count_change
+  question: How did order count change from two months ago to last month?
+  sql: |-
+    WITH monthly AS (
+    SELECT date_trunc('month', ordered_at) AS month, count(*) AS n
+    FROM analytics.v_orders
+    WHERE ordered_at >= date_trunc('month', now()) - interval '2 months'
+    AND ordered_at < date_trunc('month', now())
+    GROUP BY month
+    )
+    SELECT month, n, n - lag(n) OVER (ORDER BY month) AS delta
+    FROM monthly ORDER BY month
+  difficulty: hard
+- id: campaign_conversion_rate
+  question: What's the conversion rate for each marketing campaign?
+  sql: |-
+    SELECT mc.name,
+    count(*) FILTER (WHERE ce.event_type = 'conversion')::numeric
+    / NULLIF(count(*) FILTER (WHERE ce.event_type = 'impression'), 0) AS conversion_rate
+    FROM analytics.v_campaign_events ce
+    JOIN analytics.v_marketing_campaigns mc ON mc.id = ce.campaign_id
+    GROUP BY mc.name ORDER BY mc.name
+  difficulty: hard
+- id: customers_first_order_over_threshold
+  question: How many customers' first order was over $500?
+  sql: |-
+    WITH first_orders AS (
+    SELECT DISTINCT ON (o.customer_id) o.customer_id, o.id AS order_id
+    FROM analytics.v_orders o ORDER BY o.customer_id, o.ordered_at ASC
+    ), first_order_totals AS (
+    SELECT fo.customer_id, sum(oi.quantity * oi.unit_price * (1 - oi.discount_pct/100.0)) AS total
+    FROM first_orders fo
+    JOIN analytics.v_order_items oi ON oi.order_id = fo.order_id
+    GROUP BY fo.customer_id
+    )
+    SELECT count(*) FROM first_order_totals WHERE total > 500
+  difficulty: hard
+- id: avg_discount_refunded_vs_not
+  question: Is the average discount percentage different on orders that were refunded versus not?
+  sql: |-
+    SELECT (EXISTS (SELECT 1 FROM analytics.v_refunds r WHERE r.order_id = oi.order_id)) AS was_refunded,
+    avg(oi.discount_pct)
+    FROM analytics.v_order_items oi
+    GROUP BY was_refunded ORDER BY was_refunded
+  difficulty: hard
+- id: inventory_value_by_warehouse
+  question: What's the total inventory value (quantity times unit price) by warehouse?
+  sql: |-
+    SELECT w.name, sum(i.qty_on_hand * p.unit_price_usd) AS inventory_value
+    FROM analytics.v_inventory i
+    JOIN analytics.v_warehouses w ON w.id = i.warehouse_id
+    JOIN analytics.v_products p ON p.id = i.product_id
+    GROUP BY w.name ORDER BY inventory_value DESC
+  difficulty: hard

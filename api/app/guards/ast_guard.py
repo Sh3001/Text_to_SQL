@@ -151,10 +151,20 @@ class _SemanticWalker(Visitor):
     LockingClause or FuncCall no matter how deeply nested it is).
     """
 
-    def __init__(self, catalog: Catalog | None) -> None:
+    def __init__(self, catalog: Catalog | None, local_names: frozenset[str] = frozenset()) -> None:
         super().__init__()
         self.catalog = catalog
         self.violations: list[Violation] = []
+        # Names defined by the query's own WITH clause(s) — a reference to
+        # one is a CTE reference, not a table that has to exist in the
+        # catalog. Collected once, up front (see _collect_cte_names),
+        # rather than tracked scope-by-scope during the walk: CTE name
+        # shadowing across nesting levels is a real SQL feature but not a
+        # security-relevant distinction here, and erring toward "known
+        # locally" only ever makes the guard more permissive of legitimate
+        # queries, never less safe — the denylists above still apply
+        # regardless of what a RangeVar's name happens to match.
+        self.local_names = local_names
 
     def visit_SelectStmt(self, ancestors, node: ast.SelectStmt):
         if node.intoClause is not None:
@@ -199,6 +209,8 @@ class _SemanticWalker(Visitor):
                     node.relname,
                 )
             )
+        elif schema is None and node.relname in self.local_names:
+            pass  # a reference to a CTE defined in this same query, not a real table
         elif self.catalog is not None and (schema is None or schema == "analytics"):
             # Generated SQL may or may not schema-qualify — chatbot_ro's
             # search_path is pinned to analytics (db/02_roles.sql), so both
@@ -239,6 +251,27 @@ def _inject_row_cap(stmt: ast.SelectStmt, cap: int) -> None:
         stmt.limitOption = enums.LimitOption.LIMIT_OPTION_COUNT
 
 
+def _collect_cte_names(raw_stmt: ast.RawStmt) -> frozenset[str]:
+    """Every CommonTableExpr name anywhere in the tree, regardless of
+    nesting depth — see _SemanticWalker.local_names for why a single
+    flat collection (not scope-aware) is the right amount of precision
+    here. Found necessary by testing: the golden-set eval harness (Phase
+    05) surfaced that `WITH order_totals AS (...) SELECT ... FROM
+    order_totals` was being rejected as UNKNOWN_TABLE — a real, would-
+    have-shipped bug that predates this fix and would have blocked any
+    correctly-formed multi-CTE query from any model, not just this
+    project's.
+    """
+    names: list[str] = []
+
+    class _CteFinder(Visitor):
+        def visit_CommonTableExpr(self, ancestors, node: ast.CommonTableExpr):
+            names.append(node.ctename)
+
+    _CteFinder()(raw_stmt)
+    return frozenset(names)
+
+
 def check(sql: str, catalog: Catalog | None = None, row_cap: int = DEFAULT_ROW_CAP) -> GuardResult:
     """Validate a generated SQL string. Returns a GuardResult — never
     raises for anything the pipeline should treat as an ordinary rejection
@@ -271,7 +304,7 @@ def check(sql: str, catalog: Catalog | None = None, row_cap: int = DEFAULT_ROW_C
             terminal=True,
         )
 
-    walker = _SemanticWalker(catalog)
+    walker = _SemanticWalker(catalog, local_names=_collect_cte_names(raw_stmt))
     walker(raw_stmt)
 
     # Defense in depth: even though the top level is a SelectStmt, a CTE

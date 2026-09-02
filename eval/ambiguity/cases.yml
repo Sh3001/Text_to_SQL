@@ -1,0 +1,158 @@
+# Ambiguity set — measures overconfidence, the thing execution accuracy
+# can't see: a model that guesses well on golden questions but never asks
+# a clarifying question would score perfectly here and still be dangerous
+# on a genuinely ambiguous one. should_clarify: true cases have no single
+# correct SQL answer without more information from the user; false cases
+# sound loose but have one clear, defensible interpretation given the
+# schema and semantic/catalog.yml — a model that asks for clarification
+# on these is being needlessly unhelpful, not appropriately cautious.
+
+- id: how_did_we_do
+  question: How did we do last quarter?
+  should_clarify: true
+  reason: "No metric named — revenue, order count, refund rate, and NPS-style 'doing well' are all plausible."
+
+- id: bare_revenue
+  question: What's our revenue?
+  should_clarify: true
+  reason: "Gross or net? Semantic layer defines both; the bare word doesn't pick one."
+
+- id: top_customers_vague
+  question: Show me the top customers.
+  should_clarify: true
+  reason: "Top by total spend, order count, or recency are all defensible and give different answers."
+
+- id: products_doing_well
+  question: Which products are doing well?
+  should_clarify: true
+  reason: "'Doing well' could mean sales volume, revenue, or review rating — no default in the schema or glossary."
+
+- id: active_customers_vague
+  question: How many active customers do we have?
+  should_clarify: true
+  reason: "glossary.active_customer defines 'active' as not soft-deleted, but a reasonable person could also mean 'ordered recently' — genuinely ambiguous, not covered by a hard rule."
+
+- id: churn_rate
+  question: What's our churn rate?
+  should_clarify: true
+  reason: "No churn definition exists anywhere in the schema or semantic layer — nothing to compute without the user defining it."
+
+- id: problem_orders
+  question: Show me problem orders.
+  should_clarify: true
+  reason: "'Problem' has no schema-defined meaning — cancelled, refunded, delayed shipment, and support-ticketed orders are all plausible."
+
+- id: how_is_business
+  question: How's the business doing this month?
+  should_clarify: true
+  reason: "No metric specified, same shape as 'how did we do' but phrased differently."
+
+- id: best_region
+  question: Which region is best?
+  should_clarify: true
+  reason: "Best by revenue, order volume, growth rate, or refund rate would all rank regions differently."
+
+- id: good_product_to_promote
+  question: What's a good product to promote?
+  should_clarify: true
+  reason: "No promotion-worthiness metric exists — high rating, high sales, and high margin would each suggest different products."
+
+- id: usual_order_volume
+  question: How many orders do we usually get?
+  should_clarify: true
+  reason: "'Usually' needs a time granularity (per day, week, month) the question never states."
+
+- id: biggest_customers_vague
+  question: Show me our biggest customers.
+  should_clarify: true
+  reason: "Same ambiguity as 'top customers' — biggest by spend or by order count are both defensible."
+
+- id: campaigns_worth_it
+  question: Which campaigns are worth the money?
+  should_clarify: true
+  reason: "No ROI metric is defined against marketing_campaigns.budget_usd anywhere in the semantic layer."
+
+- id: inventory_health
+  question: How healthy is our inventory?
+  should_clarify: true
+  reason: "No low-stock threshold is defined anywhere — 'healthy' has no numeric meaning to compute against."
+
+- id: what_are_people_saying
+  question: What are people saying about our products?
+  should_clarify: true
+  reason: "Review body text isn't a SQL aggregation question — there's no metric to compute, only free text to read."
+
+- id: orders_last_month_clear
+  question: How many orders were placed last month?
+  should_clarify: false
+  reason: "ordered_at + 'last calendar month' is the glossary's own example — a clean, single interpretation."
+
+- id: net_revenue_clear
+  question: What's our net revenue?
+  should_clarify: false
+  reason: "semantic/catalog.yml defines net_revenue explicitly as the canonical, unqualified meaning of 'revenue'."
+
+- id: customers_california_clear
+  question: How many customers do we have in California?
+  should_clarify: false
+  reason: "A direct filter on v_customers.state — no ambiguity, just needs the value-index resolution for 'California' -> 'CA'."
+
+- id: avg_order_value_clear
+  question: What's the average order value?
+  should_clarify: false
+  reason: "metrics.average_order_value in the semantic layer defines this precisely."
+
+- id: pending_orders_clear
+  question: How many orders are still pending?
+  should_clarify: false
+  reason: "status = 'pending' is a real, listed value — direct filter."
+
+- id: top_carrier_clear
+  question: Which carrier ships the most orders?
+  should_clarify: false
+  reason: "Group by carrier, order by count descending — 'most' has one obvious meaning here (count of shipments)."
+
+- id: open_tickets_clear
+  question: How many support tickets are open?
+  should_clarify: false
+  reason: "status = 'open' is a real, listed value."
+
+- id: refund_rate_clear
+  question: What's the refund rate?
+  should_clarify: false
+  reason: "metrics.refund_rate in the semantic layer defines this precisely."
+
+- id: products_per_category_clear
+  question: How many products do we have in each category?
+  should_clarify: false
+  reason: "A direct group-by — no metric ambiguity, just a count."
+
+- id: inventory_value_clear
+  question: What's the total inventory value?
+  should_clarify: false
+  reason: "qty_on_hand * unit_price_usd, summed — a standard, unambiguous computation from columns that exist."
+
+- id: email_campaigns_clear
+  question: How many campaigns are running on email?
+  should_clarify: false
+  reason: "channel = 'email' is a real, listed value."
+
+- id: top_payment_method_clear
+  question: What's the most popular payment method?
+  should_clarify: false
+  reason: "Group by method, order by count — 'most popular' has one obvious meaning (highest count)."
+
+- id: five_star_reviews_clear
+  question: How many reviews have a 5-star rating?
+  should_clarify: false
+  reason: "rating = 5 is a direct filter on a well-defined column."
+
+- id: out_of_stock_clear
+  question: Which products are out of stock?
+  should_clarify: false
+  reason: "qty_on_hand = 0 in v_inventory is a direct, unambiguous filter."
+
+- id: cancelled_orders_clear
+  question: How many orders were cancelled?
+  should_clarify: false
+  reason: "status = 'cancelled' is a real, listed value."

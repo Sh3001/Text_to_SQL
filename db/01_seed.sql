@@ -81,18 +81,41 @@ FROM generate_series(1, :n_customers) i;
 
 -- ---------------------------------------------------------------------------
 -- Products
+--
+-- category_id assignment hit the exact planner gotcha documented at the
+-- top of this file, in a spot the original verification pass never
+-- specifically checked: `(SELECT id FROM categories ... ORDER BY random()
+-- LIMIT 1)` as a scalar subquery in the SELECT list has no correlation to
+-- the outer generate_series row, so it was evaluated ONCE and every
+-- single one of the 2000 products landed in the same category (found via
+-- a category-grouped eval query returning 1 row instead of ~15 — see the
+-- Phase 05 build notes). Fixed with the same pattern used elsewhere in
+-- this file: pick a real per-row random value directly in a CTE driven
+-- off generate_series (safe), then join it to a numbered list of
+-- categories to resolve an actual id — no uncorrelated random-in-a-
+-- subquery anywhere in the chain.
 -- ---------------------------------------------------------------------------
 
+WITH leaf_categories AS (
+    SELECT id, row_number() OVER (ORDER BY id) AS rn
+    FROM analytics.categories WHERE parent_id IS NOT NULL
+), category_count AS (
+    SELECT count(*) AS n FROM leaf_categories
+), product_base AS (
+    SELECT i, (1 + floor(random() * (SELECT n FROM category_count)))::int AS cat_rn
+    FROM generate_series(1, :n_products) i
+)
 INSERT INTO analytics.products (tenant_id, category_id, sku, name, unit_price_usd, currency, is_deleted)
 SELECT
     1,
-    (SELECT id FROM analytics.categories WHERE parent_id IS NOT NULL ORDER BY random() LIMIT 1),
-    'SKU-' || lpad(i::text, 6, '0'),
-    'Product ' || i,
+    lc.id,
+    'SKU-' || lpad(pb.i::text, 6, '0'),
+    'Product ' || pb.i,
     round((5 + random() * 995)::numeric, 2),
     'USD',
     random() < 0.03
-FROM generate_series(1, :n_products) i;
+FROM product_base pb
+JOIN leaf_categories lc ON lc.rn = pb.cat_rn;
 
 -- ---------------------------------------------------------------------------
 -- Orders — the created_at / ordered_at gap is deliberate (up to 40h),

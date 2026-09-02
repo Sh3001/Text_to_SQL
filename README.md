@@ -7,7 +7,7 @@ see the design doc (published separately as an Artifact).
 
 ## Status
 
-**Phases 00 through 04 are complete and verified against a live database and
+**Phases 00 through 05 are complete and verified against a live database and
 a live model — not just written.**
 
 - `db/00_schema.sql` — the analytics schema: 14 base tables, 14 chatbot-facing
@@ -37,7 +37,11 @@ a live model — not just written.**
   the design doc and the bounded (two-attempt) repair loop: every failure
   is classified once and handled by exactly the action its class calls for
   — ask, repair, block, diagnose, or give up.
-- 199 tests total: guard/schema tests run with no DB and no model; live-DB
+- `eval/` — the evaluation harness: 52 golden pairs, 30 ambiguity cases,
+  and the adversarial CI gate, graded by real execution accuracy
+  (`api/app/pipeline/grading.py`), not string comparison. One command:
+  `eval/run_eval.py`.
+- 219 tests total: guard/schema tests run with no DB and no model; live-DB
   and live-model integration tests skip cleanly when either is unavailable.
   Every row of the error taxonomy has a test that provokes it and asserts
   the recovery (`api/tests/test_answer_repair_loop.py`).
@@ -123,6 +127,85 @@ fixed" and becomes a measured number.
 | Model output unparseable | repair | `test_unparseable_model_output_is_repaired` |
 | Valid but wrong | *(not automatically detectable — see above)* | — |
 
+### Phase 05 — the eval harness, and three real bugs it found before grading a single model answer
+
+`eval/` ships 52 individually-verified golden pairs (20 easy / 20 medium /
+12 hard — scoped down from the plan's 150, deliberately: see
+`eval/README.md` for why 52 verified beats 150 unverified), 30 ambiguity
+cases (15 genuinely ambiguous, 15 clear-but-tricky), and the adversarial
+suite reused directly from Phase 01 rather than duplicated. Run it with
+`cd eval && PYTHONPATH=../api ../.venv/bin/python run_eval.py`.
+
+Building it surfaced three real, previously-undetected bugs — not in the
+model, in this project's own code, each caught because a golden case's
+real result didn't match what a careful read of the schema said it
+should:
+
+1. **A data bug three phases old.** `avg_rating_by_category` returned 1
+   row instead of ~15. `db/01_seed.sql`'s product-seeding query had the
+   exact uncorrelated-random-in-a-subquery bug documented at that file's
+   own top (the one that broke order statuses in Phase 00) — in a spot
+   the original verification pass never specifically checked. All 2000
+   products had silently landed in a single category since the first
+   commit. Fixed at the source; every category-based query in this
+   project was wrong until this phase.
+2. **A real bug in the guard.** `WITH order_totals AS (...) SELECT ...
+   FROM order_totals` was rejected as `UNKNOWN_TABLE` — the catalog check
+   had no notion of a query's own CTE names, so it treated a locally
+   -defined CTE as a hallucinated table. This would have blocked any
+   correctly-formed multi-CTE query from any model, Claude included, not
+   just this project's — a real regression sitting quietly since Phase 02.
+   Fixed by collecting CTE names before the catalog walk and exempting
+   them.
+3. **A bug in the eval harness's own grading logic.** Several golden
+   cases were graded wrong even when the candidate's rows were
+   byte-identical to gold once sorted. The grader treated "gold SQL has
+   an `ORDER BY`" as "row order is part of the correct answer" — but
+   `ORDER BY` on a plain GROUP-BY breakdown (no `LIMIT`) was only added
+   for the golden fixture's own readability, and Postgres's hash
+   aggregate returns two independently-run, semantically-identical
+   queries in different physical row orders. 20 of the 52 golden cases
+   (nearly 40%) hit this. Fixed: order only counts as part of the answer
+   when `ORDER BY` is paired with `LIMIT` — a real top-N shape, where a
+   different sort genuinely changes which rows survive — not `ORDER BY`
+   alone.
+
+**Results**, run after all three fixes — the first genuinely trustworthy
+numbers this project has, and the honest baseline every later change
+gets measured against:
+
+| Golden set | Execution accuracy | Valid-SQL rate |
+|---|---|---|
+| Easy (20) | **95%** (19/20) | 100% |
+| Medium (20) | **70%** (14/20) | 100% |
+| Hard (12) | **25%** (3/12) | 58% |
+| **Overall (52)** | **69%** (36/52) | 90% |
+
+Avg latency 10.5s, p95 35.7s, cost $0.00 (local model). Ambiguity set:
+53% overall, but the two halves tell the real story — **7% recall**
+(asked when it genuinely should have) against **0% false-positive rate**
+(never asked needlessly). That's a 3B local model's honest character on
+this task: extremely reluctant to say "I don't know," happy to guess
+confidently on a question a larger model would flag — exactly the
+overconfidence this suite exists to measure, not a harness artifact.
+Adversarial: 61/61 blocked, 0 leaked, gate passes.
+
+The 16 golden misses read as genuine model limitations, each checked by
+hand, not further harness bugs: an unwarranted extra filter conflating
+"tickets *opened* in the last 6 months" with ticket `status = 'open'`
+(confirmed by inspecting the actual generated SQL); an average computed
+over the wrong grain (line items instead of one total per order — the
+exact double-weighting trap `catalog.yml`'s own metric note warns
+about); two more CTE-truncation failures beyond the one already covered
+in Phase 04, correctly given up on after exhausting the repair budget
+rather than executing something broken. The accuracy cliff between easy
+(95%) and hard (25%) is the honest shape of a 3B model on a real schema:
+strong on single-table lookups, weak on multi-CTE joins with a
+canonical-but-nontrivial metric definition to reproduce — which is
+exactly the profile Phase 06's UI needs to design around (surface
+confidence, make the SQL editable, don't hide the hard-tier failure
+rate behind a confident-sounding chat bubble).
+
 ## Quickstart
 
 ### Option A — Docker Compose (the documented path)
@@ -157,7 +240,7 @@ psql -U chatbot_ro -h localhost -d querywarden -c "SET app.tenant_id='1'; SELECT
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 cd api && ../.venv/bin/python -m pytest -v
-# 199 passed. Guard/schema-fixture tests always run; live-DB and
+# 219 passed. Guard/schema-fixture tests always run; live-DB and
 # live-Ollama integration tests skip cleanly if either isn't reachable.
 ```
 
@@ -170,22 +253,32 @@ cd api && ../.venv/bin/python -m app.pipeline.cli "How many orders were shipped?
 ../.venv/bin/python -m app.pipeline.cli --file ../eval/phase03_questions.txt
 ```
 
+### Run the eval harness
+
+```bash
+cd eval && PYTHONPATH=../api ../.venv/bin/python run_eval.py
+# or just the fast adversarial CI gate, no live model calls:
+PYTHONPATH=../api ../.venv/bin/python run_eval.py --adversarial-only
+```
+
 ## A note on the seed script
 
 `db/01_seed.sql` documents a real Postgres planner gotcha at its top: a
 volatile expression (`random()`, `now()`) inside a `LATERAL` subquery or a
 `WHERE` clause can be evaluated **once** and reused across every output row,
 rather than per row, whenever the expression doesn't reference an actual
-column from the "many rows" side of the join — this happened three separate
-times during development (every seeded order came back `status = 'refunded'`
-the first time through) before landing on the fix documented there: compute
+column from the "many rows" side of the join. It bit this project four
+separate times, not three: the order-status/currency bug found during
+Phase 00 (documented there), and a fourth instance — every one of 2000
+products landing in a single category — that sat undetected through
+Phases 00 through 04 and was only found in Phase 05, by a golden-set query
+whose result looked obviously wrong. The fix is always the same: compute
 per-row randomness directly in a CTE's own top-level `SELECT` list, driven
-off a real row source, never inside a subquery lacking a genuine correlated
-column reference.
+off a real row source, never inside a subquery lacking a genuine
+correlated column reference.
 
 ## Next
 
-Phase 05 (the golden-answer eval harness — execution-accuracy grading, the
-adversarial CI gate, and the number that turns "the fan-out mitigation
-seems to help" into a measured, tracked metric) and beyond are in the
-design doc.
+Phase 06 (the API and web UI — SSE streaming, the query card with its
+approval gate, the results table, charts from a validated spec) and
+beyond are in the design doc.

@@ -1,0 +1,110 @@
+- id: orders_last_30_days
+  question: How many orders were placed in the last 30 days?
+  sql: SELECT count(*) FROM analytics.v_orders WHERE ordered_at >= now() - interval '30 days'
+  difficulty: medium
+- id: top5_products_by_units
+  question: What are the top 5 products by units sold?
+  sql: |-
+    SELECT p.name, sum(oi.quantity) AS units
+    FROM analytics.v_order_items oi JOIN analytics.v_products p ON p.id = oi.product_id
+    GROUP BY p.name ORDER BY units DESC LIMIT 5
+  difficulty: medium
+- id: avg_order_value
+  question: What is the average order value?
+  sql: |-
+    SELECT avg(order_total) FROM (
+    SELECT oi.order_id, sum(oi.quantity * oi.unit_price * (1 - oi.discount_pct/100.0)) AS order_total
+    FROM analytics.v_order_items oi GROUP BY oi.order_id
+    ) t
+  difficulty: medium
+- id: customers_over_3_orders
+  question: How many customers have placed more than 3 orders?
+  sql: |-
+    SELECT count(*) FROM (
+    SELECT customer_id FROM analytics.v_orders GROUP BY customer_id HAVING count(*) > 3
+    ) t
+  difficulty: medium
+- id: products_never_ordered
+  question: How many products have never been ordered?
+  sql: |-
+    SELECT count(*) FROM analytics.v_products p
+    WHERE NOT EXISTS (SELECT 1 FROM analytics.v_order_items oi WHERE oi.product_id = p.id)
+  difficulty: medium
+- id: orders_without_payment
+  question: How many orders have no payment on record?
+  sql: |-
+    SELECT count(*) FROM analytics.v_orders o
+    WHERE NOT EXISTS (SELECT 1 FROM analytics.v_payments p WHERE p.order_id = o.id)
+  difficulty: medium
+- id: refund_rate
+  question: What fraction of orders have a refund?
+  sql: |-
+    SELECT count(DISTINCT r.order_id)::numeric / NULLIF(count(DISTINCT o.id), 0)
+    FROM analytics.v_orders o LEFT JOIN analytics.v_refunds r ON r.order_id = o.id
+  difficulty: medium
+- id: shipments_by_carrier
+  question: How many shipments per carrier?
+  sql: SELECT carrier, count(*) FROM analytics.v_shipments GROUP BY carrier ORDER BY carrier
+  difficulty: medium
+- id: avg_rating_by_category
+  question: What's the average rating by product category?
+  sql: |-
+    SELECT c.name, avg(r.rating) FROM analytics.v_reviews r
+    JOIN analytics.v_products p ON p.id = r.product_id
+    JOIN analytics.v_categories c ON c.id = p.category_id
+    GROUP BY c.name ORDER BY c.name
+  difficulty: medium
+- id: customers_in_california
+  question: How many customers are in California?
+  sql: SELECT count(*) FROM analytics.v_customers WHERE state = 'CA'
+  difficulty: medium
+- id: orders_by_currency
+  question: How many orders use each currency?
+  sql: SELECT currency, count(*) FROM analytics.v_orders GROUP BY currency ORDER BY count(*) DESC
+  difficulty: medium
+- id: low_inventory_count
+  question: How many product/warehouse combinations have fewer than 20 units on hand?
+  sql: SELECT count(*) FROM analytics.v_inventory WHERE qty_on_hand < 20
+  difficulty: medium
+- id: tickets_last_6_months
+  question: How many support tickets were opened in the last 6 months?
+  sql: SELECT count(*) FROM analytics.v_support_tickets WHERE opened_at >= now() - interval '6 months'
+  difficulty: medium
+- id: revenue_by_payment_method
+  question: What's the total payment amount by method?
+  sql: SELECT method, sum(amount) FROM analytics.v_payments WHERE status = 'succeeded' GROUP BY method
+    ORDER BY method
+  difficulty: medium
+- id: top5_customers_by_spend
+  question: Who are the top 5 customers by total amount paid?
+  sql: |-
+    SELECT c.name, sum(p.amount) AS total_paid
+    FROM analytics.v_payments p
+    JOIN analytics.v_orders o ON o.id = p.order_id
+    JOIN analytics.v_customers c ON c.id = o.customer_id
+    WHERE p.status = 'succeeded'
+    GROUP BY c.name ORDER BY total_paid DESC LIMIT 5
+  difficulty: medium
+- id: avg_shipping_lag
+  question: What's the average number of days between an order being placed and delivered?
+  sql: |-
+    SELECT avg(extract(epoch FROM (s.delivered_at - o.ordered_at)) / 86400.0)
+    FROM analytics.v_shipments s JOIN analytics.v_orders o ON o.id = s.order_id
+    WHERE s.delivered_at IS NOT NULL
+  difficulty: medium
+- id: customers_null_state
+  question: How many customers have no state on file?
+  sql: SELECT count(*) FROM analytics.v_customers WHERE state IS NULL
+  difficulty: medium
+- id: products_out_of_stock_somewhere
+  question: How many products are out of stock in at least one warehouse?
+  sql: SELECT count(DISTINCT product_id) FROM analytics.v_inventory WHERE qty_on_hand = 0
+  difficulty: medium
+- id: open_tickets_with_order
+  question: How many open support tickets are linked to an order?
+  sql: SELECT count(*) FROM analytics.v_support_tickets WHERE status = 'open' AND order_id IS NOT NULL
+  difficulty: medium
+- id: distinct_carriers
+  question: Which carriers do we use for shipping?
+  sql: SELECT DISTINCT carrier FROM analytics.v_shipments ORDER BY carrier
+  difficulty: medium
