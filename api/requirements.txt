@@ -1,10 +1,10 @@
 # Pinned for reproducible builds — bump deliberately, not incidentally.
 fastapi==0.118.0
 uvicorn[standard]==0.37.0
-pydantic==2.11.4
+pydantic==2.13.5
 psycopg[binary]==3.2.3
 pglast==8.4
-anthropic==0.72.0
-pyyaml==6.0.2
-pytest==8.3.5
+ollama==0.6.2  # local generation backend — see api/app/llm/client.py for why (no Anthropic key available)
+pyyaml==6.0.3
+pytest==9.1.1
 pytest-asyncio==0.25.2

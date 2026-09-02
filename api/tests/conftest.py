@@ -38,3 +38,21 @@ requires_db = pytest.mark.skipif(not _db_reachable(), reason="querywarden databa
 def pg_conn():
     with psycopg.connect(TEST_DATABASE_URL) as conn:
         yield conn
+
+
+def _ollama_reachable() -> bool:
+    try:
+        import ollama
+
+        ollama.Client().list()
+        return True
+    except Exception:
+        return False
+
+
+# Phase 03's generation layer runs against a local Ollama model (see
+# api/app/llm/client.py for why: no Anthropic key was available). These
+# tests exercise a real, running local model and are inherently slower and
+# less than perfectly deterministic — skip cleanly, same as requires_db,
+# rather than fail in an environment with no Ollama server.
+requires_ollama = pytest.mark.skipif(not _ollama_reachable(), reason="Ollama server not reachable")

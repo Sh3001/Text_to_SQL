@@ -40,6 +40,10 @@ if TYPE_CHECKING:
 #: build time via a real COUNT(DISTINCT ...), not guessed from the type.
 MAX_DISTINCT_VALUES = 500
 
+#: Values shorter than this are never fuzzy-matched — see the comment in
+#: resolve() for why (edit-distance similarity is unreliable at this length).
+MIN_FUZZY_TARGET_LENGTH = 4
+
 #: (view, column) candidates. Kept as an explicit list rather than
 #: auto-discovering every text column in every view: a text column with
 #: high cardinality (customer name, review body) would pass a naive
@@ -114,10 +118,19 @@ class ValueIndex:
 
         # 3. Fuzzy — typos and case variants where the strings genuinely
         #    overlap. Deliberately does NOT run when the synonym map
-        #    matched above; a confirmed synonym is not a guess.
+        #    matched above; a confirmed synonym is not a guess. Skips
+        #    values shorter than MIN_FUZZY_TARGET_LENGTH: edit-distance
+        #    similarity is close to meaningless on 2-3 character codes —
+        #    "use" vs "US" scores 0.8, well past a naive 0.6-0.75 cutoff,
+        #    purely because both strings are short (found by testing
+        #    against real questions, not a hypothetical). Short codes
+        #    ('US', 'CA', 'GB') already have exact matching and, for the
+        #    cases that need it, the explicit synonym map — they were
+        #    never fuzzy matching's job.
         scored = [
             (v, difflib.SequenceMatcher(None, needle_lower, v.lower()).ratio())
             for v in entry.values
+            if len(v) >= MIN_FUZZY_TARGET_LENGTH
         ]
         scored = [(v, s) for v, s in scored if s >= cutoff]
         scored.sort(key=lambda pair: pair[1], reverse=True)

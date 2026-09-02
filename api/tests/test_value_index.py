@@ -59,6 +59,20 @@ def test_case_variant_resolves_via_fuzzy_or_exact(pg_conn):
 
 
 @requires_db
+def test_short_word_does_not_falsely_fuzzy_match_a_short_code(pg_conn):
+    # Regression test: "use" (as in "which currency do most orders use")
+    # scores 0.8 similarity against country code "US" via plain
+    # edit-distance — comfortably past a 0.6-0.75 cutoff — purely because
+    # both strings are short, not because they mean anything alike. Found
+    # while checking hint extraction against real questions, not invented.
+    # Fuzzy matching must not fire on codes this short; exact/synonym
+    # matching still can.
+    idx = value_index.build(pg_conn, semantic.value_synonyms())
+    results = idx.resolve("v_customers", "country", "use")
+    assert results == []
+
+
+@requires_db
 def test_unresolvable_literal_returns_empty(pg_conn):
     idx = value_index.build(pg_conn, semantic.value_synonyms())
     results = idx.resolve("v_orders", "status", "quantum-teleported")

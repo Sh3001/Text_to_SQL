@@ -1,0 +1,24 @@
+# Phase 03 checkpoint — 20 hand-written questions, generate -> guard -> execute.
+# Not the Phase 05 eval harness (no golden answers here) — read the output,
+# don't assert on it. Blank lines and lines starting with # are ignored.
+
+How many orders are there in total?
+How many orders were shipped?
+How many customers signed up last year?
+What are the distinct order statuses?
+How many customers are in California?
+Show me customers in the USA.
+How many orders were placed last month?
+What is our net revenue by region?
+What are the top 5 products by revenue?
+How many orders had a status of shiped?
+Which currency do most orders use?
+What is the average order value?
+How many refunds were issued and what's the total refund amount?
+Show me the 10 most recent orders.
+How many support tickets are still open?
+What's the average product rating by category?
+How many campaign events were conversions?
+Which warehouse has the most inventory on hand?
+How did we do last quarter?
+Show me revenue for orders that were cancelled.

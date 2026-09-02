@@ -47,10 +47,31 @@ metrics:
 
   net_revenue:
     sql: >
-      SUM(oi.quantity * oi.unit_price * (1 - oi.discount_pct / 100.0))
-      - COALESCE((SELECT SUM(r.amount) FROM analytics.v_refunds r WHERE r.order_id = o.id), 0)
+      WITH order_totals AS (
+        SELECT oi.order_id, SUM(oi.quantity * oi.unit_price * (1 - oi.discount_pct / 100.0)) AS gross
+        FROM analytics.v_order_items oi GROUP BY oi.order_id
+      ), order_refunds AS (
+        SELECT r.order_id, SUM(r.amount) AS refunded
+        FROM analytics.v_refunds r GROUP BY r.order_id
+      )
+      SELECT <dimension>, SUM(ot.gross - COALESCE(orf.refunded, 0)) AS net_revenue
+      FROM analytics.v_orders o
+      JOIN order_totals ot ON ot.order_id = o.id
+      LEFT JOIN order_refunds orf ON orf.order_id = o.id
+      <join dimension table if grouping by one>
+      GROUP BY <dimension>
     requires_join: [v_orders, v_order_items, v_refunds]
-    grain: "per order, refunds subtracted — this is what 'revenue' means unqualified"
+    grain: "per order (or grouped by any dimension), refunds subtracted — this is what 'revenue' means unqualified"
+    warning: >
+      Do NOT join v_order_items and v_refunds directly to the same
+      v_orders row and then SUM() — an order with 3 order_items and 1
+      refund produces 3 joined rows, and summing the refund amount across
+      them triple-counts it (verified against real seeded data: a refund
+      of ~3973 came out as 11918, exactly 3x, for an order with 3 line
+      items). Aggregate order_items and refunds to one row per order
+      FIRST (as above), THEN join those single-row-per-order aggregates
+      together. This is the general rule whenever two fact tables with a
+      one-to-many relationship to orders are combined in one query.
 
   refund_rate:
     sql: "COUNT(DISTINCT r.order_id)::numeric / NULLIF(COUNT(DISTINCT o.id), 0)"

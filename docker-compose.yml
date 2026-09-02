@@ -34,7 +34,12 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/querywarden
       # The role the guarded pipeline actually queries as — see db/02_roles.sql.
       CHATBOT_DATABASE_URL: postgresql://chatbot_ro:chatbot_ro@postgres:5432/querywarden
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Generation runs on a local Ollama model, not Claude — see the
+      # README's "Why Ollama" section. host.docker.internal reaches the
+      # Ollama server running on the host (Docker Desktop on Mac/Windows;
+      # on Linux, run Ollama with OLLAMA_HOST=0.0.0.0 and use the host's
+      # real IP or --add-host instead).
+      OLLAMA_HOST: http://host.docker.internal:11434
     ports:
       - "8000:8000"
     volumes:
