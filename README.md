@@ -7,8 +7,8 @@ see the design doc (published separately as an Artifact).
 
 ## Status
 
-**Phases 00 through 05 are complete and verified against a live database and
-a live model — not just written.**
+**Phases 00 through 06 are complete and verified against a live database, a
+live model, and a real browser — not just written.**
 
 - `db/00_schema.sql` — the analytics schema: 14 base tables, 14 chatbot-facing
   views, and a deliberately excluded `legacy_orders_flat` trap table.
@@ -41,10 +41,51 @@ a live model — not just written.**
   and the adversarial CI gate, graded by real execution accuracy
   (`api/app/pipeline/grading.py`), not string comparison. One command:
   `eval/run_eval.py`.
-- 219 tests total: guard/schema tests run with no DB and no model; live-DB
+- `api/app/main.py` + `api/app/api/` — the FastAPI app: two SSE
+  endpoints (`POST /api/query`, `POST /api/query/approve`) streaming
+  real progress events from the pipeline's own `on_event` callback
+  (`answer.py`'s `plan()`/`finish()` split — Phase 04's single blocking
+  `answer()` call refactored into two composable phases so execution can
+  genuinely pause for approval, not simulate pausing).
+- `web/` — the chat UI: React + TypeScript + Vite, no framework beyond
+  that. One `QueryCard` component renders every state a turn can be in;
+  a chart renders only after validating the model's proposed axes
+  against the real result columns, falling back to the table otherwise.
+- 228 tests total: guard/schema tests run with no DB and no model; live-DB
   and live-model integration tests skip cleanly when either is unavailable.
   Every row of the error taxonomy has a test that provokes it and asserts
-  the recovery (`api/tests/test_answer_repair_loop.py`).
+  the recovery (`api/tests/test_answer_repair_loop.py`); the approval
+  gate's full pause/approve/reject/re-guard-edited-SQL flow is proven in
+  `api/tests/test_api.py`.
+
+### Phase 06 checkpoint — driven in a real headless browser, not just curled
+
+"A stranger can ask a question, read the assumptions, approve the SQL,
+and get a chart" — the design doc's own Phase 06 checkpoint, verified
+with Playwright against the actual running app (`npm run dev` + `uvicorn`),
+not just the API in isolation. Two real bugs surfaced by actually looking
+at what rendered, not by assuming a passing type-check meant a correct
+page:
+
+1. **A React anti-pattern that would have silently eaten every SQL
+   edit.** The approval-gate textarea's `onChange` handler originally
+   mutated `turn.editedSql` directly on the prop object — React never
+   re-renders from that, so every keystroke in the "edit before you
+   approve" box would have been invisible on screen while silently not
+   updating the state actually sent to `/approve`. Caught before ever
+   loading the page, by re-reading the component; fixed by lifting the
+   edit into a proper `onEditSql` callback prop.
+2. **An unreadable Y-axis on every currency chart.** Recharts' default
+   tick formatting collided into a stack of literal `"0000000"` labels
+   on this project's revenue figures (hundreds of millions) — a real
+   rendering bug, only visible in an actual screenshot; `tsc` and the
+   component's own logic gave no signal anything was wrong. Fixed with
+   `Intl.NumberFormat`'s compact notation (`140M`) and a wider axis.
+
+The live model rarely produces anything below `"high"` confidence (see
+`web/README.md`), so the approval-gate pause was exercised live via a
+deliberately-tricky question and directly via `test_api.py`'s stubbed
+-model tests, not assumed working from the code alone.
 
 ### Why Ollama, not Claude
 
@@ -240,7 +281,7 @@ psql -U chatbot_ro -h localhost -d querywarden -c "SET app.tenant_id='1'; SELECT
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 cd api && ../.venv/bin/python -m pytest -v
-# 219 passed. Guard/schema-fixture tests always run; live-DB and
+# 228 passed. Guard/schema-fixture tests always run; live-DB and
 # live-Ollama integration tests skip cleanly if either isn't reachable.
 ```
 
@@ -261,6 +302,18 @@ cd eval && PYTHONPATH=../api ../.venv/bin/python run_eval.py
 PYTHONPATH=../api ../.venv/bin/python run_eval.py --adversarial-only
 ```
 
+### Run the full app — API + web UI
+
+```bash
+# terminal 1
+cd api && DATABASE_URL=postgresql://postgres:postgres@localhost:5432/querywarden \
+  ../.venv/bin/python -m uvicorn app.main:app --port 8001
+
+# terminal 2
+cd web && npm install && cp .env.example .env && npm run dev
+# open http://localhost:5173
+```
+
 ## A note on the seed script
 
 `db/01_seed.sql` documents a real Postgres planner gotcha at its top: a
@@ -279,6 +332,5 @@ correlated column reference.
 
 ## Next
 
-Phase 06 (the API and web UI — SSE streaming, the query card with its
-approval gate, the results table, charts from a validated spec) and
-beyond are in the design doc.
+Phase 07 (observability — per-request tracing, the cost dashboard, the
+audit log view) and beyond are in the design doc.

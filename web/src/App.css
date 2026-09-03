@@ -1,0 +1,437 @@
+.app {
+  max-width: 900px;
+  margin: 0 auto;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0 20px;
+}
+
+.app-header {
+  padding: 32px 0 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.app-subtitle {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.chat-thread {
+  flex: 1;
+  padding: 24px 0 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.empty-state {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 40px 0;
+  text-align: center;
+}
+
+.turn {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.user-question {
+  align-self: flex-end;
+  background: var(--accent);
+  color: #fff;
+  padding: 9px 14px;
+  border-radius: 14px 14px 3px 14px;
+  max-width: 75%;
+  font-size: 14.5px;
+}
+
+/* ---- query card ---- */
+
+.query-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: 4px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.query-card.verdict-answered { border-left-color: var(--good); }
+.query-card.verdict-ask { border-left-color: var(--accent); }
+.query-card.verdict-block { border-left-color: var(--bad); }
+.query-card.verdict-diagnose { border-left-color: var(--warn); }
+.query-card.verdict-give_up { border-left-color: var(--bad); }
+.query-card.verdict-error { border-left-color: var(--bad); }
+
+.card-intent {
+  margin: 0;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.card-assumptions {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* ---- SQL block ---- */
+
+.card-sql-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sql-toggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.confidence-pill {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+
+.confidence-pill.confidence-high {
+  background: var(--good-soft);
+  color: var(--good);
+  border-color: var(--good);
+}
+
+.confidence-pill.confidence-medium,
+.confidence-pill.confidence-low {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.sql-editor {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  resize: vertical;
+}
+
+.sql-editor:read-only {
+  color: var(--ink-2);
+}
+
+.sql-editor:not(:read-only) {
+  border-color: var(--accent-line);
+  background: var(--surface);
+}
+
+/* ---- progress / streaming ---- */
+
+.progress-log {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 13px;
+}
+
+.progress-line {
+  color: var(--muted);
+}
+
+.progress-line.current {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.progress-line.current::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 8px;
+  animation: pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress-line.current::before { animation: none; }
+}
+
+/* ---- approval gate ---- */
+
+.approval-gate {
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-radius: 4px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.approval-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.approval-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.approve-btn, .reject-btn {
+  border-radius: 4px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+
+.approve-btn {
+  background: var(--accent);
+  color: #fff;
+}
+
+.reject-btn {
+  background: transparent;
+  color: var(--ink-2);
+  border-color: var(--line);
+}
+
+/* ---- outcome / error messages ---- */
+
+.outcome-message {
+  margin: 0;
+  font-size: 13.5px;
+  padding: 10px 12px;
+  border-radius: 4px;
+}
+
+.outcome-message.outcome-ask { background: var(--accent-soft); color: var(--ink-2); }
+.outcome-message.outcome-block { background: var(--bad-soft); color: var(--bad); }
+.outcome-message.outcome-diagnose { background: var(--warn-soft); color: var(--ink-2); }
+.outcome-message.outcome-give_up { background: var(--bad-soft); color: var(--bad); }
+.outcome-message.outcome-discarded { background: var(--surface-2); color: var(--muted); }
+
+.error-message {
+  margin: 0;
+  color: var(--bad);
+  font-size: 13.5px;
+}
+
+/* ---- diagnosis table ---- */
+
+.diagnosis-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.diagnosis-table th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 500;
+  border-bottom: 1px solid var(--line);
+  padding: 5px 8px;
+}
+
+.diagnosis-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.diagnosis-table tr.culprit-row td {
+  background: var(--bad-soft);
+  color: var(--bad);
+  font-weight: 500;
+}
+
+/* ---- results table ---- */
+
+.results-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.results-table {
+  width: 100%;
+  min-width: 320px;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.results-table th {
+  text-align: left;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.results-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink-2);
+}
+
+.results-table td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.results-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table-note {
+  margin: 0;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+
+/* ---- chart ---- */
+
+.chart-wrap {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 10px 6px 4px;
+}
+
+.chart-fallback-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.chart-grid {
+  stroke: var(--line);
+}
+
+.chart-bar {
+  fill: var(--accent);
+}
+
+.chart-line {
+  stroke: var(--accent);
+}
+
+/* ---- card footer / feedback ---- */
+
+.card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.feedback-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.feedback-btn {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.feedback-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* ---- input form ---- */
+
+.chat-input-form {
+  position: sticky;
+  bottom: 0;
+  background: linear-gradient(to top, var(--ground) 60%, transparent);
+  padding: 16px 0 24px;
+  display: flex;
+  gap: 8px;
+}
+
+.chat-input-form input {
+  flex: 1;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 11px 14px;
+  font-size: 14.5px;
+  color: var(--ink);
+}
+
+.chat-input-form input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.chat-input-form button {
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 8px;
+  padding: 0 20px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.chat-input-form button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
