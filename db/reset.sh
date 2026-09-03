@@ -14,7 +14,7 @@ echo "==> dropping + recreating $DB"
 psql -U "$PGUSER" -h "$PGHOST" -c "DROP DATABASE IF EXISTS $DB;"
 psql -U "$PGUSER" -h "$PGHOST" -c "CREATE DATABASE $DB;"
 
-for f in db/00_schema.sql db/01_seed.sql db/02_roles.sql; do
+for f in db/00_schema.sql db/01_seed.sql db/02_roles.sql db/03_observability.sql; do
     echo "==> applying $f"
     psql -U "$PGUSER" -h "$PGHOST" -d "$DB" -v ON_ERROR_STOP=1 -f "$f"
 done

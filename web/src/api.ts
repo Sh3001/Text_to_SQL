@@ -1,4 +1,5 @@
 import { streamSSE } from "./sse";
+import type { AuditEvent, StatsSummary } from "./types";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001";
 
@@ -18,4 +19,17 @@ export async function checkHealth(): Promise<{ status: string; schema_fingerprin
   const resp = await fetch(`${API_URL}/api/health`);
   if (!resp.ok) throw new Error(`API unreachable (${resp.status})`);
   return resp.json();
+}
+
+export async function fetchStats(hours = 24): Promise<StatsSummary> {
+  const resp = await fetch(`${API_URL}/api/stats?hours=${hours}`);
+  if (!resp.ok) throw new Error(`stats unreachable (${resp.status})`);
+  return resp.json();
+}
+
+export async function fetchAuditEvents(limit = 50): Promise<AuditEvent[]> {
+  const resp = await fetch(`${API_URL}/api/audit?limit=${limit}`);
+  if (!resp.ok) throw new Error(`audit unreachable (${resp.status})`);
+  const body = await resp.json();
+  return body.events;
 }

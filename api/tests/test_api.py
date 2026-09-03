@@ -196,3 +196,71 @@ def test_ambiguous_question_streams_ask_verdict_no_approval_needed(client, monke
     assert "awaiting_approval" not in kinds
     assert events[-1][0] == "done"
     assert events[-1][1]["verdict"] == "ask"
+
+
+# ---------------------------------------------------------------------------
+# Observability — audit logging + the dashboard endpoints (Phase 07)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _clean_audit_log_for_api_tests():
+    with psycopg.connect(TEST_DATABASE_URL) as conn, conn.cursor() as cur:
+        cur.execute("TRUNCATE audit.query_log RESTART IDENTITY")
+        conn.commit()
+    yield
+    with psycopg.connect(TEST_DATABASE_URL) as conn, conn.cursor() as cur:
+        cur.execute("TRUNCATE audit.query_log RESTART IDENTITY")
+        conn.commit()
+
+
+@requires_db
+def test_answered_query_is_audit_logged(client, monkeypatch):
+    _stub_generate_plan(monkeypatch, _gen_result("SELECT count(*) FROM analytics.v_orders", confidence="high"))
+    client.post("/api/query", json={"question": "how many orders"})
+
+    stats_resp = client.get("/api/stats")
+    assert stats_resp.status_code == 200
+    body = stats_resp.json()
+    assert body["total_queries"] == 1
+    assert any(v["verdict"] == "answered" and v["count"] == 1 for v in body["by_verdict"])
+
+
+@requires_db
+def test_blocked_query_shows_up_in_the_audit_view(client, monkeypatch):
+    _stub_generate_plan(monkeypatch, _gen_result("DROP TABLE analytics.orders", confidence="high"))
+    client.post("/api/query", json={"question": "delete everything"})
+
+    audit_resp = client.get("/api/audit")
+    assert audit_resp.status_code == 200
+    events = audit_resp.json()["events"]
+    assert len(events) == 1
+    assert events[0]["verdict"] == "block"
+    assert events[0]["generated_sql"] == "DROP TABLE analytics.orders"
+
+
+@requires_db
+def test_answered_query_does_not_appear_in_the_default_audit_view(client, monkeypatch):
+    # /api/audit defaults to block/give_up — "the interesting ones" — a
+    # routine answered question shouldn't clutter it.
+    _stub_generate_plan(monkeypatch, _gen_result("SELECT count(*) FROM analytics.v_orders", confidence="high"))
+    client.post("/api/query", json={"question": "how many orders"})
+
+    events = client.get("/api/audit").json()["events"]
+    assert events == []
+
+
+@requires_db
+def test_edited_and_approved_query_is_logged_as_edited(client, monkeypatch):
+    _stub_generate_plan(monkeypatch, _gen_result("SELECT count(*) FROM analytics.v_orders", confidence="low"))
+    paused = client.post("/api/query", json={"question": "how many orders"})
+    plan_id = _iter_sse_events(paused.text)[-1][1]["plan_id"]
+
+    client.post("/api/query/approve", json={
+        "plan_id": plan_id, "sql": "SELECT count(*) FROM analytics.v_customers",
+    })
+
+    with psycopg.connect(TEST_DATABASE_URL) as conn, conn.cursor() as cur:
+        cur.execute("SELECT edited, safe_sql FROM audit.query_log")
+        row = cur.fetchone()
+    assert row[0] is True
+    assert "v_customers" in row[1]

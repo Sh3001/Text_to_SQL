@@ -88,3 +88,33 @@ export type Turn = {
   errorMessage: string | null;
   discarded: boolean;
 };
+
+// ---- observability (Phase 07) ----
+
+export type VerdictStat = {
+  verdict: string;
+  count: number;
+  avg_duration_ms: number | null;
+  avg_repair_attempts: number | null;
+};
+
+export type StatsSummary = {
+  window_hours: number;
+  total_queries: number;
+  avg_duration_ms: number | null;
+  by_verdict: VerdictStat[];
+};
+
+export type AuditEvent = {
+  request_id: string;
+  occurred_at: string;
+  tenant_id: number;
+  question: string;
+  verdict: string;
+  failure_kind: string | null;
+  generated_sql: string | null;
+  safe_sql: string | null;
+  edited: boolean;
+  repair_attempts: number;
+  message: string;
+};

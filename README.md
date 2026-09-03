@@ -5,9 +5,34 @@ so that the safety guarantee does not depend on the language model
 behaving. Full architecture, phased build plan, and rationale:
 see the design doc (published separately as an Artifact).
 
+```mermaid
+flowchart LR
+    Q[Question] --> G[Generate<br/>Ollama, qwen2.5-coder:3b]
+    G -->|repair, 2x max| G
+    G --> AST{AST Guard<br/>pglast}
+    AST -->|unsafe, terminal| BLOCK[["Blocked"]]
+    AST -->|repairable| G
+    AST -->|ok| BUDGET{Plan Budget<br/>EXPLAIN}
+    BUDGET -->|over budget| G
+    BUDGET -->|ok| CONF{Confidence}
+    CONF -->|high| EXEC[Execute<br/>chatbot_ro, read-only]
+    CONF -->|medium / low| GATE[/Approval Gate<br/>human reviews or edits SQL/]
+    GATE -->|approve| AST
+    GATE -->|reject| DISCARD[Discarded]
+    EXEC --> ZERO{0 rows?}
+    ZERO -->|yes| DIAG[Diagnose<br/>which filter emptied it]
+    ZERO -->|no| RESULT[Result + chart]
+    EXEC -.-> AUDIT[(audit.query_log<br/>chatbot_ro: no access)]
+    BLOCK -.-> AUDIT
+```
+
+Edited SQL from the approval gate re-enters the guard, same as model
+output — the diagram's only shortcut is drawing that as one arrow back
+to `AST Guard` rather than two identical paths.
+
 ## Status
 
-**Phases 00 through 06 are complete and verified against a live database, a
+**Phases 00 through 07 are complete and verified against a live database, a
 live model, and a real browser — not just written.**
 
 - `db/00_schema.sql` — the analytics schema: 14 base tables, 14 chatbot-facing
@@ -51,41 +76,23 @@ live model, and a real browser — not just written.**
   that. One `QueryCard` component renders every state a turn can be in;
   a chart renders only after validating the model's proposed axes
   against the real result columns, falling back to the table otherwise.
-- 228 tests total: guard/schema tests run with no DB and no model; live-DB
+- `db/03_observability.sql` + `api/app/obs/` — `audit.query_log`, written
+  only by the app's own trusted connection (`chatbot_ro` has zero grants
+  on the `audit` schema — reserved since Phase 00, wired up here). One
+  row per terminal outcome, blocked attempts included; `GET /api/stats`
+  and `GET /api/audit` read it back for the dashboard and the audit view.
+- `web/src/components/Activity.tsx` — the second tab in the UI: query
+  volume and latency by verdict, and every blocked/given-up attempt with
+  its timestamp, question, and the model's actual SQL.
+- 238 tests total: guard/schema tests run with no DB and no model; live-DB
   and live-model integration tests skip cleanly when either is unavailable.
   Every row of the error taxonomy has a test that provokes it and asserts
   the recovery (`api/tests/test_answer_repair_loop.py`); the approval
   gate's full pause/approve/reject/re-guard-edited-SQL flow is proven in
-  `api/tests/test_api.py`.
-
-### Phase 06 checkpoint — driven in a real headless browser, not just curled
-
-"A stranger can ask a question, read the assumptions, approve the SQL,
-and get a chart" — the design doc's own Phase 06 checkpoint, verified
-with Playwright against the actual running app (`npm run dev` + `uvicorn`),
-not just the API in isolation. Two real bugs surfaced by actually looking
-at what rendered, not by assuming a passing type-check meant a correct
-page:
-
-1. **A React anti-pattern that would have silently eaten every SQL
-   edit.** The approval-gate textarea's `onChange` handler originally
-   mutated `turn.editedSql` directly on the prop object — React never
-   re-renders from that, so every keystroke in the "edit before you
-   approve" box would have been invisible on screen while silently not
-   updating the state actually sent to `/approve`. Caught before ever
-   loading the page, by re-reading the component; fixed by lifting the
-   edit into a proper `onEditSql` callback prop.
-2. **An unreadable Y-axis on every currency chart.** Recharts' default
-   tick formatting collided into a stack of literal `"0000000"` labels
-   on this project's revenue figures (hundreds of millions) — a real
-   rendering bug, only visible in an actual screenshot; `tsc` and the
-   component's own logic gave no signal anything was wrong. Fixed with
-   `Intl.NumberFormat`'s compact notation (`140M`) and a wider axis.
-
-The live model rarely produces anything below `"high"` confidence (see
-`web/README.md`), so the approval-gate pause was exercised live via a
-deliberately-tricky question and directly via `test_api.py`'s stubbed
--model tests, not assumed working from the code alone.
+  `api/tests/test_api.py`; `chatbot_ro`'s zero access to the audit schema
+  is a real, executable regression test now
+  (`api/tests/test_audit.py::test_chatbot_ro_has_zero_access_to_the_audit_schema`),
+  not just something checked once by hand at a `psql` prompt.
 
 ### Why Ollama, not Claude
 
@@ -247,6 +254,59 @@ exactly the profile Phase 06's UI needs to design around (surface
 confidence, make the SQL editable, don't hide the hard-tier failure
 rate behind a confident-sounding chat bubble).
 
+### Phase 06 checkpoint — driven in a real headless browser, not just curled
+
+"A stranger can ask a question, read the assumptions, approve the SQL,
+and get a chart" — the design doc's own Phase 06 checkpoint, verified
+with Playwright against the actual running app (`npm run dev` + `uvicorn`),
+not just the API in isolation. Two real bugs surfaced by actually looking
+at what rendered, not by assuming a passing type-check meant a correct
+page:
+
+1. **A React anti-pattern that would have silently eaten every SQL
+   edit.** The approval-gate textarea's `onChange` handler originally
+   mutated `turn.editedSql` directly on the prop object — React never
+   re-renders from that, so every keystroke in the "edit before you
+   approve" box would have been invisible on screen while silently not
+   updating the state actually sent to `/approve`. Caught before ever
+   loading the page, by re-reading the component; fixed by lifting the
+   edit into a proper `onEditSql` callback prop.
+2. **An unreadable Y-axis on every currency chart.** Recharts' default
+   tick formatting collided into a stack of literal `"0000000"` labels
+   on this project's revenue figures (hundreds of millions) — a real
+   rendering bug, only visible in an actual screenshot; `tsc` and the
+   component's own logic gave no signal anything was wrong. Fixed with
+   `Intl.NumberFormat`'s compact notation (`140M`) and a wider axis.
+
+The live model rarely produces anything below `"high"` confidence (see
+`web/README.md`), so the approval-gate pause was exercised live via a
+deliberately-tricky question and directly via `test_api.py`'s stubbed
+-model tests, not assumed working from the code alone.
+
+### Phase 07 checkpoint — the dashboard, seeded with real traffic
+
+"The README's headline is a measured number, not an adjective" — the
+design doc's own Phase 07 checkpoint. It's satisfied twice over: the
+Phase 05 section above leads with 95%/70%/25% execution accuracy, not
+"the model is pretty accurate"; and the Activity tab now shows the same
+discipline live, reading real rows out of `audit.query_log` rather than
+a static mock. Verified the same way as Phase 06 — a real browser, real
+questions asked through the actual running app, one representative
+blocked attempt seeded in for the audit view — not assumed correct from
+the endpoint code alone: 3 questions asked, 87ms avg latency, 1 blocked,
+the verdict-breakdown table matching exactly, and the blocked attempt
+showing its real generated SQL and rejection reason in the audit list.
+
+**What's still a named gap, not an oversight:** the design doc's
+`conversations` and `messages` tables (multi-turn history surviving a
+restart) and the pending-plan approval state (`app.state.pending_plans`,
+still in-memory — Phase 06's gap, unchanged by this phase) are both
+still missing; only the *terminal outcome* of a question is durable.
+And the design doc's other Phase 07 deliverable — "a 60-second demo
+GIF" — is a real screen recording a human needs to make; nothing in
+this environment can produce one, so it's named here rather than
+silently dropped or faked.
+
 ## Quickstart
 
 ### Option A — Docker Compose (the documented path)
@@ -259,7 +319,7 @@ docker compose up -d postgres
 ### Option B — a Postgres already running locally
 
 ```bash
-./db/reset.sh            # drops/recreates `querywarden`, applies all three SQL files
+./db/reset.sh            # drops/recreates `querywarden`, applies all four SQL files
 ```
 
 ### Prove the floor holds
@@ -274,6 +334,8 @@ psql -U chatbot_ro -h localhost -d querywarden -c "SELECT count(*) FROM analytic
 #   -> 0   (no app.tenant_id set: the view fails closed, not open)
 psql -U chatbot_ro -h localhost -d querywarden -c "SET app.tenant_id='1'; SELECT count(*) FROM analytics.v_orders"
 #   -> a real, tenant-scoped number
+psql -U chatbot_ro -h localhost -d querywarden -c "SELECT * FROM audit.query_log"
+#   -> ERROR: permission denied for schema audit
 ```
 
 ### Run the test suite
@@ -281,7 +343,7 @@ psql -U chatbot_ro -h localhost -d querywarden -c "SET app.tenant_id='1'; SELECT
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r api/requirements.txt
 cd api && ../.venv/bin/python -m pytest -v
-# 228 passed. Guard/schema-fixture tests always run; live-DB and
+# 238 passed. Guard/schema-fixture tests always run; live-DB and
 # live-Ollama integration tests skip cleanly if either isn't reachable.
 ```
 
@@ -311,7 +373,8 @@ cd api && DATABASE_URL=postgresql://postgres:postgres@localhost:5432/querywarden
 
 # terminal 2
 cd web && npm install && cp .env.example .env && npm run dev
-# open http://localhost:5173
+# open http://localhost:5173 — the "Activity" tab reads real rows back
+# out of audit.query_log once you've asked a few questions.
 ```
 
 ## A note on the seed script
@@ -332,5 +395,14 @@ correlated column reference.
 
 ## Next
 
-Phase 07 (observability — per-request tracing, the cost dashboard, the
-audit log view) and beyond are in the design doc.
+The design doc's full phased build plan (00 through 07) is complete —
+this is the first point in the project where "Next" isn't the next
+numbered phase. What's left is scoped in the design doc's own "What to
+cut, and what never to cut" section and in the gaps named throughout
+this README, the largest being: `conversations`/`messages` persistence
+(multi-turn history surviving a restart), the pending-plan approval
+state moving from `app.state.pending_plans` into Postgres, and a real
+150-case golden set (this project ships 52, individually verified —
+see `eval/README.md` for why that trade was made deliberately). None of
+these are surprises; each was named honestly in the phase where it was
+deferred, not discovered now.

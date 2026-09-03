@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { approvePlan, askQuestion, rejectPlan } from "./api";
+import { Activity } from "./components/Activity";
 import { QueryCard } from "./components/QueryCard";
 import type { Turn } from "./types";
 import "./App.css";
@@ -46,6 +47,7 @@ export default function App() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [view, setView] = useState<"chat" | "activity">("chat");
 
   function patchTurn(id: string, patch: Partial<Turn>) {
     setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -114,40 +116,58 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <h1>Query Warden</h1>
-        <p className="app-subtitle">Ask a question about the marketplace warehouse.</p>
+        <div className="app-header-top">
+          <div>
+            <h1>Query Warden</h1>
+            <p className="app-subtitle">Ask a question about the marketplace warehouse.</p>
+          </div>
+          <nav className="view-tabs">
+            <button className={view === "chat" ? "active" : ""} onClick={() => setView("chat")}>
+              Chat
+            </button>
+            <button className={view === "activity" ? "active" : ""} onClick={() => setView("activity")}>
+              Activity
+            </button>
+          </nav>
+        </div>
       </header>
 
-      <main className="chat-thread">
-        {turns.length === 0 && (
-          <p className="empty-state">
-            Try: "How many orders were shipped?" or "What's our net revenue by region?"
-          </p>
-        )}
-        {turns.map((turn) => (
-          <div key={turn.id} className="turn">
-            <div className="user-question">{turn.question}</div>
-            <QueryCard
-              turn={turn}
-              onApprove={(planId, sql) => handleApprove(turn.id, planId, sql)}
-              onReject={(planId) => handleReject(turn.id, planId)}
-              onEditSql={(sql) => patchTurn(turn.id, { editedSql: sql })}
-            />
-          </div>
-        ))}
-      </main>
+      {view === "activity" ? (
+        <Activity />
+      ) : (
+        <>
+          <main className="chat-thread">
+            {turns.length === 0 && (
+              <p className="empty-state">
+                Try: "How many orders were shipped?" or "What's our net revenue by region?"
+              </p>
+            )}
+            {turns.map((turn) => (
+              <div key={turn.id} className="turn">
+                <div className="user-question">{turn.question}</div>
+                <QueryCard
+                  turn={turn}
+                  onApprove={(planId, sql) => handleApprove(turn.id, planId, sql)}
+                  onReject={(planId) => handleReject(turn.id, planId)}
+                  onEditSql={(sql) => patchTurn(turn.id, { editedSql: sql })}
+                />
+              </div>
+            ))}
+          </main>
 
-      <form className="chat-input-form" onSubmit={handleSubmit}>
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask a question about the warehouse…"
-          disabled={busy}
-        />
-        <button type="submit" disabled={busy || !input.trim()}>
-          Ask
-        </button>
-      </form>
+          <form className="chat-input-form" onSubmit={handleSubmit}>
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Ask a question about the warehouse…"
+              disabled={busy}
+            />
+            <button type="submit" disabled={busy || !input.trim()}>
+              Ask
+            </button>
+          </form>
+        </>
+      )}
     </div>
   );
 }
