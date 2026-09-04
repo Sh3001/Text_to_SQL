@@ -1,19 +1,8 @@
-"""The golden set's source of truth. Python, not hand-written YAML,
-because multi-line SQL as Python triple-quoted strings is much easier to
-read and edit correctly than YAML block scalars — this module is compiled
-to eval/golden/{easy,medium,hard}.yml by `python -m eval.golden._cases`
-(run from the eval/ directory), which is also where every case gets
-re-verified against a live database before being written out. Never hand
--edit the YAML files directly; edit here and rebuild.
-
-Every case was individually run against the live, seeded database at
-authoring time — not just written and hoped. One caught a real, previously
-undetected data bug in the process: db/01_seed.sql originally assigned
-every one of the 2000 products to a single category (the exact
-uncorrelated-random-in-a-subquery bug documented at that file's top, in a
-spot Phase 00's own verification never specifically checked) — a
-category-grouped rating query returning 1 row instead of ~15 was the tell.
-Fixed at the source; see db/01_seed.sql's Products section.
+"""The golden set's source of truth — Python, not hand-written YAML,
+since multi-line SQL as triple-quoted strings is easier to edit than
+YAML block scalars. Compiled to eval/golden/{easy,medium,hard}.yml by
+_build.py, which re-verifies every case against a live database before
+writing it out. Never hand-edit the YAML files; edit here and rebuild.
 """
 
 from __future__ import annotations

@@ -1,32 +1,19 @@
-"""Plan budget — layer 3 of the defense stack, and the one layer that was
-missing after Phase 03: read-only isn't the same as safe (an unbounded
-cross join is valid, read-only SQL that can still take the box down).
-Runs EXPLAIN on guard-approved SQL, before execution, and rejects anything
-whose estimated cost or row count is wildly out of line with what a real
-analytics question over this warehouse should ever need.
+"""Plan budget — layer 3 of the defense stack: read-only isn't the same
+as safe (an unbounded cross join is valid, read-only SQL that can still
+take the box down). Runs EXPLAIN on guard-approved SQL before execution
+and rejects anything wildly out of line with a real analytics question.
 
-Thresholds calibrated against this project's own live database, not
-guessed: the heaviest legitimate query in the semantic layer (the
-net_revenue CTE, full-table, grouped) costs ~43K and estimates 4 rows; an
-unfiltered `SELECT * FROM v_order_items` costs ~19K / ~493K rows; a
-deliberate cartesian join (`FROM v_orders, v_order_items` with no ON)
-costs ~1.2 BILLION and estimates 97 BILLION rows.
+Thresholds calibrated against this project's live database: the
+heaviest legit query costs ~43K/4 rows; a deliberate cartesian join
+costs ~1.2 billion/97 billion rows.
 
-This layer and the guard's row cap (ast_guard._inject_row_cap) cover
-different attack shapes, discovered while testing this module rather than
-assumed: a bare, unfiltered `SELECT * FROM v_orders, v_order_items` with
-the guard's LIMIT 1000 already applied is genuinely CHEAP (~13 cost) —
-Postgres can produce the first 1000 rows of an unfiltered cross join with
-a handful of nested-loop iterations, so a low cost estimate here is
-correct, not a blind spot. The same join wrapped in an aggregate
-(`SELECT count(*) FROM v_orders, v_order_items`) costs ~608 MILLION,
-because an aggregate must fully materialize its input before producing
-any output row — no LIMIT can rescue that. So: LIMIT defends against
-"too much data returned"; this layer defends against "too expensive to
-compute at all," which is the case a GROUP BY, DISTINCT, ORDER BY, or
-aggregate over an unfiltered join actually represents, and the reason
-this layer earns its place even though every query it sees already has
-a LIMIT on it.
+Covers a different attack shape than the guard's LIMIT injection: a
+bare unfiltered cross join with LIMIT 1000 already applied is genuinely
+cheap (Postgres stops after a few nested-loop iterations) — the same
+join wrapped in an aggregate costs ~608 million, because an aggregate
+must fully materialize its input first and no LIMIT can rescue that.
+LIMIT defends against too much data returned; this layer defends
+against too expensive to compute at all.
 """
 
 from __future__ import annotations

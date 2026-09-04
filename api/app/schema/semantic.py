@@ -1,9 +1,6 @@
 """Loads semantic/catalog.yml — the hand-maintained business glossary,
-canonical metrics, blessed join paths, deprecations, and value synonyms
-described in the project plan's schema-intelligence section. Kept to a
-single small loader rather than a class per section: the file is meant to
-be read and edited by a domain expert, not modeled as application state.
-"""
+canonical metrics, join paths, deprecations, and value synonyms. A plain
+loader, not a class per section: meant to be edited by a domain expert."""
 
 from __future__ import annotations
 

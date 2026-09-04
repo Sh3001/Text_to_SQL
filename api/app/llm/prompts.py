@@ -1,18 +1,8 @@
-"""Builds the prompt sent to the local model.
-
-Ordering matters for a reason that isn't about billing here (Ollama has
-no per-token cost), but the underlying mechanism is the same one Anthropic's
-prompt caching exploits: llama.cpp reuses the KV-cache for a matching
-token prefix within a warm model — verified empirically against this
-project's own Ollama instance (a repeated identical prompt ran its prompt
-tokens in about a quarter of the first call's time; see the Phase 03 build
-notes). So the same discipline still pays off, just in latency instead of
-dollars: everything stable goes first — the frozen contract, then the
-rendered schema + semantic layer (unchanged until the next introspection
-snapshot) — and everything that varies request to request (the question,
-resolved value hints, timestamp) goes last, in the user message, never
-spliced into the system string.
-"""
+"""Builds the prompt sent to the local model. Stable content goes first
+(frozen contract, then schema + semantic layer), volatile content last
+(the question, hints) — llama.cpp reuses the KV-cache for a matching
+token prefix within a warm model, so this ordering pays off in latency
+even without Anthropic-style billed prompt caching."""
 
 from __future__ import annotations
 
@@ -107,13 +97,9 @@ Q: "How did we do last quarter?"
 
 @dataclass(frozen=True)
 class RepairAttempt:
-    """One prior failed attempt within the same question's bounded repair
-    loop (pipeline/answer.py) — the SQL that was tried and the concrete
-    reason it failed, whether that came from the guard (a syntax error, an
-    unknown identifier) or from Postgres itself (a real SQLSTATE and
-    position marker). Feeding the verbatim error back, rather than a
-    generic "try again", is the entire mechanism the repair loop relies on.
-    """
+    """One prior failed attempt in the bounded repair loop — the SQL
+    tried and the concrete error, fed back verbatim rather than a
+    generic "try again"."""
 
     sql: str
     error: str

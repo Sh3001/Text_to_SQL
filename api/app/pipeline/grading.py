@@ -1,9 +1,7 @@
-"""Execution-accuracy grading — split out from eval/run_eval.py so it's a
-real, importable, unit-testable module (api/tests/test_grading.py) rather
-than logic trapped inside a standalone script. Grading is execution
-accuracy, never string comparison: run both queries for real, compare
-result sets. There are a dozen correct spellings of any join; there's
-only one set of rows a query that means the same thing can return.
+"""Execution-accuracy grading. Never string comparison: run both queries
+for real, compare result sets — there are a dozen correct spellings of
+any join, but only one set of rows a query that means the same thing
+can return.
 """
 
 from __future__ import annotations
@@ -23,27 +21,14 @@ def has_order_by(sql: str) -> bool:
 
 
 def order_matters(sql: str) -> bool:
-    """Whether row ORDER is part of the correct answer, not just how the
-    query happened to be written. Requires ORDER BY *combined with*
-    LIMIT — not ORDER BY alone.
-
-    Found necessary by testing, not designed in from the start: a golden
-    case like "orders_by_status" carries `ORDER BY status` purely so the
-    authored fixture reads predictably — the actual question ("how many
-    orders per status") has no notion of a correct row order at all.
-    Grading that as order-sensitive meant two independently-executed
-    GROUP BY queries returning the exact same values could still fail
-    the comparison purely because Postgres's own hash-aggregate chose a
-    different physical row order — confirmed directly: gold and
-    candidate rows for a real case were byte-identical when sorted, and
-    `results_match` still returned False. 20 of this project's 52 golden
-    cases had `ORDER BY` without `LIMIT` and were silently graded wrong
-    by this bug before it was found.
-
-    ORDER BY + LIMIT is different in kind: it doesn't just display rows
-    in an order, it determines WHICH rows survive at all (a "top 5"
-    query with a different sort produces a different 5 rows) — that's
-    the case order-sensitive comparison exists for.
+    """Whether row ORDER is part of the correct answer. Requires ORDER BY
+    *combined with* LIMIT, not ORDER BY alone: a query can carry ORDER BY
+    purely for a fixture's own readability with no real ordering in the
+    question, and two independently-run GROUP BY queries with identical
+    values can still return rows in different physical order — grading
+    that as order-sensitive fails a genuinely correct answer. ORDER BY +
+    LIMIT is different in kind: a different sort changes WHICH rows
+    survive (a "top 5" query), not just their display order.
     """
     tree = parse_sql(sql)
     stmt = tree[0].stmt
@@ -57,21 +42,15 @@ def _canonicalize_value(v):
 
 
 def canonicalize_row(row: tuple) -> tuple:
-    # Sorted within the row — tolerates the model selecting the same
-    # columns in a different order (`region, revenue` vs `revenue,
-    # region`), which a small local model does often enough that
-    # comparing raw tuples position-by-position would fail a genuinely
-    # correct answer for a superficial reason. Real tradeoff, not free:
-    # two different columns that happen to hold the same value set would
-    # look equal too — documented, not hidden.
+    # Sorted within the row — tolerates the model selecting columns in a
+    # different order. Tradeoff: two different columns with the same
+    # value set would also look equal.
     return tuple(sorted((_canonicalize_value(v) for v in row), key=str))
 
 
 def results_match(gold_rows: list[tuple], candidate_rows: list[tuple], gold_sql: str) -> bool:
     """`gold_sql` is used only to decide whether row ORDER is part of the
-    correct answer — see order_matters() for exactly what that means and
-    why "the gold query has an ORDER BY" alone isn't the right signal.
-    """
+    correct answer — see order_matters()."""
     if len(gold_rows) != len(candidate_rows):
         return False
     gold_canon = [canonicalize_row(r) for r in gold_rows]

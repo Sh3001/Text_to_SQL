@@ -1,13 +1,10 @@
-"""Ties schema intelligence (Phase 02) to the LLM client (this phase):
-builds the PipelineContext once per process (introspect, render, load the
-value index) and turns one question into one GenerationResult.
+"""Ties schema intelligence to the LLM client: builds the PipelineContext
+once per process (introspect, render, load the value index) and turns
+one question into one GenerationResult.
 
-Schema retrieval is deliberately the simple path the project plan
-describes for a schema this size: render everything, every time, rather
-than a retrieval step. At 14 tables there's nothing to filter — see the
-plan's "under ~40 tables" guidance. ctx is built once and reused across
-requests; only introspect/render again when the schema might have
-changed (a new deploy), not per question.
+Schema retrieval is deliberately simple for a schema this size: render
+everything, every time, rather than a retrieval step. ctx is built once
+and reused across requests, not rebuilt per question.
 """
 
 from __future__ import annotations

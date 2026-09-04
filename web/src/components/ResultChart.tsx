@@ -11,10 +11,8 @@ import {
 } from "recharts";
 import type { ChartSpec, ExecutionResult } from "../types";
 
-// "The model proposes a ChartSpec; the frontend validates the named
-// columns exist in the result before rendering, and falls back to the
-// table if not" — the design doc's own rule, enforced here rather than
-// trusted from the model's output.
+// Validates the model's proposed axes against the result's actual
+// columns before rendering; falls back to the table if they don't exist.
 export function ResultChart({ chart, execution }: { chart: ChartSpec; execution: ExecutionResult }) {
   if (chart.kind === "none") return null;
 
@@ -68,12 +66,8 @@ export function ResultChart({ chart, execution }: { chart: ChartSpec; execution:
   );
 }
 
-// Recharts' default Y-axis formatting on large values (this project's
-// revenue figures run into the hundreds of millions) overlapped ticks
-// into unreadable repeated zeros — found by actually rendering the
-// component with realistic data, not assumed. Intl's compact notation
-// ("140M") both fixes the collision and reads better than the raw
-// integer would have anyway.
+// Recharts' default Y-axis formatting on large values (hundreds of
+// millions) overlapped ticks into unreadable repeated zeros.
 const compactNumber = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 
 function formatYAxisTick(v: number): string {
@@ -83,9 +77,8 @@ function formatYAxisTick(v: number): string {
 function formatAxisLabel(v: unknown): string {
   if (v === null || v === undefined) return "—";
   const s = String(v);
-  // Postgres timestamptz values arrive as Python's str(datetime), e.g.
-  // "2026-01-15 00:00:00+00:00" — trim to the date for a readable axis
-  // tick without pulling in a date-formatting library for one substring.
+  // Postgres timestamptz values arrive as Python's str(datetime) — trim
+  // to the date for a readable axis tick.
   const isoish = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/;
   return isoish.test(s) ? s.slice(0, 10) : s;
 }

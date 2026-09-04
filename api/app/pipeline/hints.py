@@ -1,15 +1,11 @@
-"""Extracts candidate literals from a user's question and resolves them
-through the value index (schema/value_index.py) before generation — the
-concrete fix for "revenue in California" silently returning zero rows
-because the column stores 'CA'.
+"""Extracts candidate literals from a question and resolves them through
+the value index before generation — fixes "revenue in California"
+silently returning zero rows because the column stores 'CA'.
 
 Extraction covers three shapes: quoted substrings, Title-Case phrases
-(proper nouns — place names), and individual lowercase words (typos:
-"shiped" for "shipped"). The first pass only caught the first two, which
-made "How many orders had a status of shiped?" produce nothing — a typo
-is exactly the case fuzzy matching exists for, and it's usually typed in
-lowercase, not capitalized. A stopword list plus MIN_FUZZY_SCORE keep the
-lowercase pass from turning every query word into a resolution attempt.
+(place names), and lowercase words (typos, usually typed lowercase not
+capitalized). A stopword list plus MIN_FUZZY_SCORE keep the lowercase
+pass from turning every query word into a resolution attempt.
 """
 
 from __future__ import annotations
@@ -22,9 +18,7 @@ _QUOTED_RE = re.compile(r"""['"]([^'"]{2,40})['"]""")
 _TITLE_CASE_RE = re.compile(r"\b[A-Z][a-zA-Z]*(?:\s+[A-Z][a-zA-Z]*){0,2}\b")
 _WORD_RE = re.compile(r"[a-z]{3,}")
 
-# Common words in an analytics question that would otherwise be tried
-# against every indexed column — not an exhaustive stopword list, just
-# the ones that actually showed up as noise during testing.
+# Common words that would otherwise be tried against every indexed column.
 _STOPWORDS = frozenset(
     """
     how many much what which when where who why show tell give list find

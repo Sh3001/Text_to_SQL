@@ -1,24 +1,12 @@
 """The AST guard — layer 2 of the defense-in-depth stack.
 
-Parses generated SQL with pglast (bindings to libpg_query, the actual
-Postgres parser — not a regex, not a keyword blocklist) and walks the real
-parse tree. What this module approves is exactly the tree the server will
-execute: there is no lexical trick that separates the two, which is why
-`SEL/**/ECT`, `WITH d AS (DELETE ... RETURNING *) SELECT * FROM d`, and
-`SELECT pg_sleep(9999)` all get caught here rather than surviving to
-production. See the "Bypass" table in the project plan.
-
-Design: allowlist the statement shape (single bare SELECT), denylist a
-short list of functions/schemas that a plain SELECT could still reach.
-The allowlist does the heavy lifting — PREPARE, EXECUTE, CALL, COPY,
-VACUUM, LOCK, SET, TRUNCATE, GRANT, DO, and every DDL form are rejected for
-free because none of them parse as a SelectStmt. The denylist exists only
-for capabilities reachable *from inside* a SelectStmt (function calls,
-schema-qualified reads, row locks).
-
-The approved SQL that reaches the database is re-deparsed from the AST
-this module just checked, not the caller's original string — no gap
-between "what was verified" and "what runs".
+Parses generated SQL with pglast (libpg_query, the real Postgres parser
+— not a regex or keyword blocklist) and walks the parse tree. Allowlists
+the statement shape (single bare SELECT — PREPARE/EXECUTE/CALL/COPY/
+VACUUM/LOCK/SET/TRUNCATE/GRANT/DO/every DDL form are rejected for free
+since none parse as a SelectStmt), denylists the functions/schemas/locks
+still reachable from inside one. The SQL that reaches the database is
+re-deparsed from the checked AST, never the caller's original string.
 """
 
 from __future__ import annotations
@@ -33,16 +21,10 @@ from pglast.visitors import Visitor
 
 from .errors import TERMINAL_REASONS, RejectReason
 
-# ---------------------------------------------------------------------------
-# Denylists — narrow and specific on purpose. Every entry earns its place
-# by being a capability that survives inside an otherwise-ordinary SELECT.
-# ---------------------------------------------------------------------------
-
-#: Functions with a side effect, a resource-exhaustion risk, or a direct
-#: filesystem/network reach. Checked by name regardless of where the call
-#: appears (target list, WHERE clause, or FROM-clause table function) —
-#: `SELECT * FROM pg_read_file(...)` is caught the same way as
-#: `SELECT pg_read_file(...)`.
+# Denylists — each entry is a capability reachable from inside an
+# otherwise-ordinary SELECT. Checked by function name regardless of
+# where the call appears (target list, WHERE, or table function).
+#: Side effects, resource abuse, or filesystem/network reach.
 DENIED_FUNCTIONS: frozenset[str] = frozenset(
     {
         # Timing / resource abuse
@@ -63,15 +45,10 @@ DENIED_FUNCTIONS: frozenset[str] = frozenset(
     }
 )
 
-#: Schemas holding system catalogs and internals. A read-only SELECT against
-#: these can enumerate roles, passwords hashes (pg_authid), and server
-#: internals that have nothing to do with the analytics warehouse.
+#: System catalogs/internals — a read-only SELECT here can enumerate roles and password hashes.
 DENIED_SCHEMAS: frozenset[str] = frozenset({"pg_catalog", "information_schema", "pg_toast"})
 
-#: Well-known system relations, denied even when referenced unqualified
-#: (the connecting role's search_path is pinned to `analytics` at the
-#: database level — see db/02_roles.sql — but the guard doesn't rely on
-#: that alone).
+#: Denied even unqualified — search_path is pinned to analytics (db/02_roles.sql), but the guard doesn't rely on that alone.
 DENIED_UNQUALIFIED_RELATIONS: frozenset[str] = frozenset(
     {
         "pg_shadow", "pg_authid", "pg_user", "pg_roles",
@@ -82,10 +59,9 @@ DENIED_UNQUALIFIED_RELATIONS: frozenset[str] = frozenset(
 #: The only statement shape this pipeline ever generates.
 ALLOWED_TOP_LEVEL: frozenset[type] = frozenset({ast.SelectStmt})
 
-#: Statement types that must never appear anywhere in the tree — including
-#: nested inside a CTE, where the *outer* statement is still a harmless
-#: SelectStmt (`WITH d AS (DELETE FROM x RETURNING *) SELECT * FROM d`).
-#: The top-level check alone does not catch this; the tree walk does.
+#: Must never appear anywhere in the tree, including nested inside a CTE
+#: (`WITH d AS (DELETE ... RETURNING *) SELECT * FROM d` has a harmless
+#: top-level SelectStmt) — the top-level check alone doesn't catch this.
 DENIED_STMT_TYPES: tuple[type, ...] = (
     ast.InsertStmt, ast.UpdateStmt, ast.DeleteStmt, ast.MergeStmt,
     ast.TruncateStmt, ast.DropStmt, ast.CreateStmt, ast.AlterTableStmt,
@@ -98,10 +74,8 @@ DEFAULT_ROW_CAP = 1000
 
 
 class Catalog(Protocol):
-    """What the guard needs from the schema layer (Phase 02) to catch
-    hallucinated identifiers. Optional — pass ``None`` to skip these checks
-    entirely, which is the right choice before a catalog snapshot exists.
-    """
+    """What the guard needs to catch hallucinated identifiers. Optional —
+    pass None to skip these checks before a catalog snapshot exists."""
 
     def has_relation(self, schema: str | None, name: str) -> bool: ...
     def nearest_relations(self, name: str, limit: int = 3) -> list[str]: ...
@@ -124,9 +98,8 @@ class GuardResult:
     violations: list[Violation] = field(default_factory=list)
 
 
-# Ordering used only to pick a single headline reason when several
-# violations exist in one statement — the full list still ships in
-# `violations` / `detail` for logging.
+# Picks one headline reason when several violations exist; the full
+# list still ships in `violations` / `detail`.
 _SEVERITY = (
     RejectReason.DISALLOWED_STATEMENT_TYPE,
     RejectReason.UNSAFE_FUNCTION,
@@ -155,15 +128,10 @@ class _SemanticWalker(Visitor):
         super().__init__()
         self.catalog = catalog
         self.violations: list[Violation] = []
-        # Names defined by the query's own WITH clause(s) — a reference to
-        # one is a CTE reference, not a table that has to exist in the
-        # catalog. Collected once, up front (see _collect_cte_names),
-        # rather than tracked scope-by-scope during the walk: CTE name
-        # shadowing across nesting levels is a real SQL feature but not a
-        # security-relevant distinction here, and erring toward "known
-        # locally" only ever makes the guard more permissive of legitimate
-        # queries, never less safe — the denylists above still apply
-        # regardless of what a RangeVar's name happens to match.
+        # CTE names (see _collect_cte_names) — a reference to one is a
+        # CTE, not a table that has to exist in the catalog. Not
+        # scope-aware; erring toward "known locally" only ever makes the
+        # guard more permissive, never less safe.
         self.local_names = local_names
 
     def visit_SelectStmt(self, ancestors, node: ast.SelectStmt):
@@ -181,9 +149,6 @@ class _SemanticWalker(Visitor):
                     "FOR UPDATE / FOR SHARE takes row locks; not permitted on a read-only pipeline",
                 )
             )
-        # Keep walking into the rest of this node (target list, FROM, WHERE,
-        # subqueries) — returning None (not visitors.Skip) continues normally.
-
     def visit_FuncCall(self, ancestors, node: ast.FuncCall):
         name = _func_name(node)
         if name in DENIED_FUNCTIONS:
@@ -212,13 +177,8 @@ class _SemanticWalker(Visitor):
         elif schema is None and node.relname in self.local_names:
             pass  # a reference to a CTE defined in this same query, not a real table
         elif self.catalog is not None and (schema is None or schema == "analytics"):
-            # Generated SQL may or may not schema-qualify — chatbot_ro's
-            # search_path is pinned to analytics (db/02_roles.sql), so both
-            # `v_orders` and `analytics.v_orders` are the same relation and
-            # both deserve a catalog check. Anything qualified with some
-            # OTHER schema isn't this branch's concern (see SnapshotCatalog
-            # .has_relation): it's either already caught by the schema
-            # denylist above, or will fail at execution for lack of grants.
+            # search_path is pinned to analytics, so both `v_orders` and
+            # `analytics.v_orders` deserve a catalog check.
             if not self.catalog.has_relation(schema, node.relname):
                 suggestions = self.catalog.nearest_relations(node.relname)
                 hint = f" — did you mean: {', '.join(suggestions)}?" if suggestions else ""
@@ -240,12 +200,9 @@ def _headline(violations: list[Violation]) -> Violation:
 
 
 def _inject_row_cap(stmt: ast.SelectStmt, cap: int) -> None:
-    """Add a LIMIT only if the statement doesn't already have one. This is
-    a courtesy, not the hard backstop — the execution envelope (Phase 04)
-    enforces the real cap via cursor-paged fetch regardless of what LIMIT
-    the SQL claims, so a query that lies about its own limit still can't
-    flood the caller.
-    """
+    """Add a LIMIT only if absent — a courtesy, not the hard backstop;
+    the execution envelope enforces the real cap via cursor-paged fetch
+    regardless of what LIMIT the SQL claims."""
     if stmt.limitCount is None:
         stmt.limitCount = ast.A_Const(val=ast.Integer(ival=cap))
         stmt.limitOption = enums.LimitOption.LIMIT_OPTION_COUNT
@@ -253,15 +210,7 @@ def _inject_row_cap(stmt: ast.SelectStmt, cap: int) -> None:
 
 def _collect_cte_names(raw_stmt: ast.RawStmt) -> frozenset[str]:
     """Every CommonTableExpr name anywhere in the tree, regardless of
-    nesting depth — see _SemanticWalker.local_names for why a single
-    flat collection (not scope-aware) is the right amount of precision
-    here. Found necessary by testing: the golden-set eval harness (Phase
-    05) surfaced that `WITH order_totals AS (...) SELECT ... FROM
-    order_totals` was being rejected as UNKNOWN_TABLE — a real, would-
-    have-shipped bug that predates this fix and would have blocked any
-    correctly-formed multi-CTE query from any model, not just this
-    project's.
-    """
+    nesting depth (see _SemanticWalker.local_names)."""
     names: list[str] = []
 
     class _CteFinder(Visitor):
@@ -307,10 +256,8 @@ def check(sql: str, catalog: Catalog | None = None, row_cap: int = DEFAULT_ROW_C
     walker = _SemanticWalker(catalog, local_names=_collect_cte_names(raw_stmt))
     walker(raw_stmt)
 
-    # Defense in depth: even though the top level is a SelectStmt, a CTE
-    # body can itself be a DeleteStmt/InsertStmt/etc. Visitor recurses into
-    # CTE bodies automatically, so catch those here rather than trusting
-    # the top-level check alone.
+    # A CTE body can itself be a DeleteStmt/InsertStmt/etc. even though the
+    # top level is a harmless SelectStmt — catch that here.
     nested_denied = _find_nested_denied_statement(raw_stmt)
     if nested_denied is not None:
         return GuardResult(

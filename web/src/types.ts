@@ -1,9 +1,5 @@
 // Mirrors api/app/api/sse.py's serialize_outcome / serialize_plan_result
-// and the progress-event payloads answer.py's on_event callback emits —
-// kept in sync by hand (no shared schema codegen for a project this
-// size); if a field here stops matching, the browser console shows
-// `undefined` rather than a type error, so double check server-side
-// changes get mirrored here too.
+// — kept in sync by hand, no shared schema codegen.
 
 export type ChartSpec = {
   kind: "bar" | "line" | "none";
@@ -89,7 +85,7 @@ export type Turn = {
   discarded: boolean;
 };
 
-// ---- observability (Phase 07) ----
+// ---- observability ----
 
 export type VerdictStat = {
   verdict: string;

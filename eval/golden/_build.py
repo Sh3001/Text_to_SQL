@@ -33,10 +33,8 @@ class _Dumper(yaml.SafeDumper):
     pass
 
 
-# yaml.safe_dump uses SafeDumper specifically — a representer registered
-# on the plain Dumper (or via add_representer's default) is silently
-# ignored by it, which is why the style hint below has to target this
-# subclass by name, not the module-level default.
+# yaml.safe_dump uses SafeDumper specifically — a representer on the
+# plain Dumper is silently ignored by it.
 _Dumper.add_representer(str, _str_representer)
 
 
@@ -47,9 +45,8 @@ def main() -> None:
     for tier, cases in ALL_TIERS.items():
         entries = []
         for case_id, question, sql in cases:
-            # Normalize the triple-quoted source's indentation (SQL
-            # whitespace between tokens isn't semantically meaningful) so
-            # the YAML block literal comes out left-aligned and readable.
+            # Normalize the triple-quoted source's indentation for a
+            # left-aligned YAML block literal.
             sql = "\n".join(line.strip() for line in sql.strip().splitlines())
             guard_result = ast_guard.check(sql)
             if not guard_result.ok:

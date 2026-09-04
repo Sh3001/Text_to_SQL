@@ -1,18 +1,12 @@
-"""The Phase 05 checkpoint: one command that prints accuracy, cost, and
-latency. Three suites, matching the project plan's evaluation section:
+"""One command that prints accuracy, cost, and latency. Three suites:
 
-  * golden      (eval/golden/*.yml)     — execution-accuracy, per tier.
+  * golden      (eval/golden/*.yml)        — execution-accuracy, per tier.
   * ambiguity   (eval/ambiguity/cases.yml) — clarification precision/recall.
   * adversarial (imported from api/tests/test_ast_guard.ADVERSARIAL_SUITE,
-                 not duplicated into YAML — single source of truth; see
-                 the --adversarial-only section below) — hard CI gate,
-                 0 required, non-zero exit on any leak.
+                 not duplicated into YAML) — hard CI gate, 0 required.
 
-Grading is execution accuracy, not string comparison: both the gold SQL
-and the model's generated SQL are run for real against the live database,
-and their result sets are compared — sorted, order-insensitive unless the
-gold query itself has an ORDER BY (detected by parsing, via pglast, never
-by searching the SQL text for the words "order by").
+Grading is execution accuracy, not string comparison: both queries run
+for real against the live database and their result sets are compared.
 
 Usage (from eval/, with the api package importable):
     PYTHONPATH=../api ../.venv/bin/python run_eval.py
@@ -62,10 +56,8 @@ def load_ambiguity() -> list[dict]:
 
 
 def load_adversarial() -> list[str]:
-    # Single source of truth: the same 61-case suite Phase 01's guard
-    # tests already run on every commit. Duplicating it into a YAML file
-    # here would just be a second copy that silently drifts out of sync —
-    # importing it is the actual fix, not a shortcut.
+    # Single source of truth: the same suite the guard tests already run
+    # on every commit, not a second copy that could drift out of sync.
     import tests.test_ast_guard as guard_tests  # type: ignore[import-not-found]
 
     return guard_tests.ADVERSARIAL_SUITE
@@ -95,10 +87,8 @@ def run_golden_suite(ctx, cases: list[dict], tenant_id: int, model: str | None) 
         outcome = answer(ctx, case["question"], tenant_id=tenant_id, model=model)
         latency_ms = (time.monotonic() - t0) * 1000
 
+        # answer() doesn't surface per-attempt token counts — known gap, see README.
         prompt_tokens = eval_tokens = 0
-        # answer() doesn't currently surface per-attempt token counts on
-        # AnswerOutcome (Phase 04 scope was error handling, not metrics) —
-        # tracked as a known gap rather than guessed at; see README.
 
         if outcome.verdict is not Action.ANSWERED:
             results.append(GoldenCaseResult(

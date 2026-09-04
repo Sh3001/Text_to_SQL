@@ -1,17 +1,11 @@
-"""Bridges synchronous, callback-instrumented pipeline calls (answer.plan
-/ answer.finish — both blocking, they hit Ollama and Postgres over the
-network) into async SSE streams, without adding a dependency.
+"""Bridges synchronous, callback-instrumented pipeline calls (both
+blocking — they hit Ollama and Postgres) into async SSE streams, without
+adding a dependency.
 
-`run_with_events` is the one primitive: it runs `work(on_event)` in a
-worker thread, where `work` calls `on_event(kind, payload)` as many times
-as it wants (real progress events) and returns a final result. The async
-generator yields `("progress", kind, payload)` for each on_event call and
-finally `("result", None, work's return value)` — or `("error", None,
-{"message": ...})` if `work` raised. Two different endpoint shapes
-(POST /api/query auto-executes or pauses for approval depending on
-confidence; POST /api/query/approve always executes) both build on this
-same primitive rather than forcing one generic wrapper to cover both —
-see routes.py for how each uses it.
+`run_with_events` is the one primitive: runs `work(on_event)` in a
+worker thread and yields `("progress", kind, payload)` for each
+on_event call, then `("result", None, return value)` or `("error",
+None, {"message": ...})` if `work` raised.
 """
 
 from __future__ import annotations
@@ -29,11 +23,8 @@ _SENTINEL = object()
 
 
 def sse_format(event: str, data: dict) -> str:
-    # SSE wire format: "event: <name>\ndata: <json>\n\n" — the blank line
-    # is what terminates one event. default=str is the fallback for raw
-    # DB row values json.dumps doesn't natively know (Decimal, datetime)
-    # — left unconverted upstream so a numeric-looking Decimal reads as
-    # the exact string the database produced, not a re-derived float.
+    # default=str handles raw DB values (Decimal, datetime) json.dumps
+    # doesn't natively know.
     payload = json.dumps(data, default=str)
     return f"event: {event}\ndata: {payload}\n\n"
 
@@ -65,12 +56,9 @@ async def run_with_events(work: Callable[[EventCallback], Any]) -> AsyncGenerato
 
 
 def serialize_outcome(outcome: AnswerOutcome) -> dict:
-    """Explicit, not reflection-based — the object graph (AnswerOutcome ->
-    SqlPlan / ExecutionResult / ZeroRowDiagnosis) is small and fixed, and
-    writing out exactly what each field means here is worth more than a
-    generic recursive serializer that would silently do the wrong thing
-    the day one of these dataclasses gains a field.
-    """
+    """Explicit, not reflection-based — the object graph is small and
+    fixed, and a generic recursive serializer would silently do the
+    wrong thing the day a dataclass gains a field."""
     return {
         "verdict": outcome.verdict.value,
         "question": outcome.question,
@@ -104,7 +92,7 @@ def _serialize_execution(execution) -> dict | None:
         return None
     return {
         "columns": execution.columns,
-        "rows": execution.rows,  # raw DB values (Decimal/datetime included) — see sse_format's default=str
+        "rows": execution.rows,  # raw DB values — see sse_format's default=str
         "row_count": execution.row_count,
         "duration_ms": execution.duration_ms,
     }

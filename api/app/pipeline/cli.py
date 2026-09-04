@@ -1,8 +1,7 @@
 """CLI driver for the generate -> guard -> budget -> execute -> diagnose
-loop (pipeline/answer.py). Used for both the Phase 03 checkpoint (twenty
-hand-written questions) and Phase 04's error-taxonomy verification —
-prints enough of the outcome to see which action fired and why, without
-being the eval harness (Phase 05, which grades against golden answers).
+loop (pipeline/answer.py). Prints enough of the outcome to see which
+action fired and why — not the eval harness, which grades against
+golden answers.
 """
 
 from __future__ import annotations

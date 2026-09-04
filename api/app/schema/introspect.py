@@ -1,21 +1,12 @@
-"""Catalog introspection — Phase 02, layer 1 of schema intelligence.
+"""Catalog introspection. Connects with the app's own trusted credentials,
+never chatbot_ro — introspecting information_schema/pg_catalog is exactly
+what the AST guard denies to generated SQL.
 
-Connects with the application's own (trusted) credentials, never chatbot_ro
-— introspecting information_schema/pg_catalog is exactly the capability the
-AST guard denies to generated SQL (see CATALOG_SCHEMA_ACCESS in
-guards/ast_guard.py). This module is the trusted path that reads those
-catalogs on the pipeline's behalf, once, at startup or on a schedule; the
-generated SQL itself never touches them.
-
-Produces a Snapshot describing exactly what chatbot_ro can query: the
-granted view set, sourced from information_schema.role_table_grants rather
-than assumed from the view list, so a view that exists but was never
-granted (or vice versa) is a loud error here instead of a silent
-capability gap discovered later. PK/FK/comments are read from the
-underlying base tables (views carry none of their own) and attached to
-each view by name convention (`v_<table>` -> `<table>`) — documented as an
-inference, not introspected fact, because Postgres has no builtin notion
-of "this view's logical primary key."
+Produces a Snapshot of exactly what chatbot_ro can query, sourced from
+information_schema.role_table_grants rather than assumed from the view
+list, so a view/grant mismatch is a loud SchemaDriftError instead of a
+silent gap. PK/FK/comments are inferred from the base tables by name
+convention (`v_<table>` -> `<table>`) since views carry none of their own.
 """
 
 from __future__ import annotations
@@ -29,14 +20,8 @@ if TYPE_CHECKING:
 
 
 class SchemaDriftError(RuntimeError):
-    """The view set and the chatbot_ro grant set disagree.
-
-    Both directions are a real problem: a view with no grant is dead
-    weight the model will never be able to query; a grant with no
-    matching view means something is reachable that this module doesn't
-    know how to describe (or, worse, was granted by hand outside
-    db/02_roles.sql and never reviewed).
-    """
+    """The view set and the chatbot_ro grant set disagree — a view with
+    no grant, or a grant with no matching view."""
 
 
 @dataclass(frozen=True)
@@ -78,13 +63,9 @@ class Snapshot:
 
 
 def _row_magnitude(reltuples: float | None) -> str:
-    # Bucketed to an order of magnitude, not the exact reltuples estimate.
-    # reltuples drifts a few percent with every autovacuum/ANALYZE — if the
-    # rendered DDL embedded the raw number, that drift alone would
-    # invalidate the prompt cache on an otherwise-unchanged schema. The
-    # bucket only moves when the table grows/shrinks by a real order of
-    # magnitude, which is also the only time a query planner's behavior
-    # (and therefore the model's join strategy) should actually change.
+    # Bucketed to an order of magnitude, not the exact reltuples estimate —
+    # reltuples drifts with every autovacuum, which would otherwise
+    # invalidate the prompt cache on an unchanged schema.
     if reltuples is None:
         return "unknown"
     n = max(reltuples, 0)
@@ -160,10 +141,8 @@ _GRANTED_VIEWS_SQL = """
 
 def introspect(conn: "psycopg.Connection", schema: str = "analytics", chatbot_role: str = "chatbot_ro") -> Snapshot:
     """Read the live catalog and return a Snapshot of exactly what
-    `chatbot_role` can query. Raises SchemaDriftError if the view set and
-    the grant set disagree — that's a deployment bug worth surfacing loudly
-    rather than silently rendering a stale or incomplete schema to the model.
-    """
+    `chatbot_role` can query. Raises SchemaDriftError on a view/grant
+    mismatch rather than silently rendering a stale schema."""
     with conn.cursor() as cur:
         cur.execute(_GRANTED_VIEWS_SQL, {"role": chatbot_role, "schema": schema})
         granted = {row[0] for row in cur.fetchall()}
@@ -235,9 +214,8 @@ def introspect(conn: "psycopg.Connection", schema: str = "analytics", chatbot_ro
     from .render import render  # local import: render depends on these dataclasses
 
     captured_at = _now_iso()
-    # Fingerprint over the rendered DDL, not the dataclasses — the whole
-    # point is a hash that only changes when what the model actually sees
-    # changes, and captured_at must never be part of that.
+    # Fingerprint over the rendered DDL, not the dataclasses — only
+    # changes when what the model actually sees changes.
     provisional = Snapshot(schema=schema, relations=tuple(relations), captured_at=captured_at, fingerprint="")
     ddl = render(provisional)
     fingerprint = hashlib.sha256(ddl.encode("utf-8")).hexdigest()

@@ -1,29 +1,16 @@
-"""The bounded repair loop — Phase 04's centerpiece. Ties generate, guard,
-plan_budget, execute, and diagnose together into the actual error taxonomy
-from the project plan: each failure gets classified once (errors.py) and
-handled by exactly the action its classification says, never by ad hoc
-handling scattered through the loop.
+"""The bounded repair loop. Ties generate, guard, plan_budget, execute,
+and diagnose together into the error taxonomy (errors.py): each failure
+is classified once and handled by exactly the action its class calls
+for. Two attempts, enforced via MAX_REPAIR_ATTEMPTS — a missing column
+gets the real error fed back and one more try; a security violation
+never gets a second try; when the budget is spent, the loop stops and
+says so.
 
-Two attempts, tracked and enforced here, not left to hope: a missing
-column or an over-budget query gets the real error fed back and one more
-try; a security violation never gets a second try at all; and when the
-budget is spent, the loop stops and says so plainly rather than looping
-forever against a confused model — see MAX_REPAIR_ATTEMPTS and the
-plan's "bound the loop and mean it" callout.
-
-Split in two (Phase 06) for the API's approval gate: `plan()` runs
-generate -> guard -> budget with the repair loop and stops right before
-execution — either at a ready-to-execute SQL string, or at a terminal
-outcome (ASK/BLOCK/GIVE_UP) reached before execution was ever in play.
-`finish()` takes a PlanResult and runs execute() + the zero-row
-diagnostic. `answer()` composes the two exactly as before — every
-existing caller (the CLI, the eval harness, every test in
-test_answer_repair_loop.py) keeps working unchanged, because this is a
-refactor of the SAME control flow, not a new one. The optional
-`on_event` callback is the only new surface: it fires at each real state
-transition (a generation attempt, a guard/budget verdict, an execution
-result) so the API layer can stream genuine progress rather than a
-simulated one — see api/app/routes.py.
+Split in two for the API's approval gate: `plan()` runs generate ->
+guard -> budget with the repair loop and stops right before execution;
+`finish()` runs execute() + the zero-row diagnostic. `answer()` composes
+the two. The optional `on_event` callback fires at each real state
+transition so the API can stream genuine progress.
 """
 
 from __future__ import annotations
@@ -67,10 +54,8 @@ class AnswerOutcome:
 @dataclass
 class PlanResult:
     """Output of plan(): either a ready-to-execute (plan, safe_sql) pair,
-    or a terminal outcome reached before execution was ever reached (an
-    ambiguous question, a blocked query, or a repair budget exhausted on
-    generation/guard/budget-check failures).
-    """
+    or a terminal outcome reached before execution (ambiguous, blocked,
+    or repair budget exhausted)."""
     ready: bool
     question: str
     plan: SqlPlan | None
@@ -156,14 +141,9 @@ def plan(
         try:
             budget_result = plan_budget.check(guard_result.safe_sql, tenant_id)
         except ExecutionError as exc:
-            # EXPLAIN itself can fail with a real Postgres error — Postgres
-            # constant-folds immutable expressions during planning, so
-            # `SELECT 1/0` raises division-by-zero under EXPLAIN even
-            # though it never actually executes. Route it through the same
-            # classification as an execution failure rather than letting
-            # it escape uncaught (found by testing: an early version of
-            # this loop only wrapped execute() in try/except, not the
-            # budget check, and this exact query crashed the whole loop).
+            # EXPLAIN itself can fail with a real Postgres error (constant
+            # folding — `SELECT 1/0` raises under EXPLAIN even though it
+            # never executes); classify it the same as an execution failure.
             kind, action = classify_execution_error(exc)
             if action is Action.ASK:
                 return PlanResult(False, question, gen_plan, None, attempt_num, AnswerOutcome(
@@ -211,15 +191,12 @@ def finish(
     catalog=None,
 ) -> AnswerOutcome:
     """Runs execute() + the zero-row diagnostic for a ready PlanResult.
-    A non-ready result's terminal_outcome is returned as-is (never
-    reaches execution) — makes `finish(plan(...))` always safe to call
-    uniformly regardless of which branch plan() took.
+    A non-ready result's terminal_outcome is returned as-is, so
+    `finish(plan(...))` is always safe to call uniformly.
 
-    `override_sql` lets an approval-gated caller substitute a
-    human-edited SQL string (the query card's editable SQL box) — it is
-    re-guarded here, never trusted as-is, exactly like model output:
-    editing SQL is not a privileged path (see the design doc's UI
-    principles). `catalog` is required only when `override_sql` is given.
+    `override_sql` lets an approval-gated caller substitute human-edited
+    SQL — re-guarded here, never trusted, exactly like model output.
+    `catalog` is required only when `override_sql` is given.
     """
     if not result.ready:
         return result.terminal_outcome

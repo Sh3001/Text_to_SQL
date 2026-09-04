@@ -1,22 +1,13 @@
--- Query Warden — analytics schema
---
--- A marketplace warehouse, seeded deterministically (see 01_seed.sql).
--- Deliberately includes the traps a text-to-SQL system has to survive:
---   * two plausible "date" columns on orders (created_at vs. ordered_at)
---   * a soft-delete flag every naive COUNT(*) gets wrong
---   * a multi-currency amount column with no implicit conversion
---   * a legacy denormalized table that still has rows and must never be joined
---
--- chatbot_ro (db/02_roles.sql) is granted SELECT on the views in this file,
--- never on the base tables — the semantic layer is enforced by the grant,
--- not merely suggested by a prompt.
+-- Query Warden — analytics schema. Marketplace warehouse, seeded
+-- deterministically (see 01_seed.sql). chatbot_ro (db/02_roles.sql) is
+-- granted SELECT on the views below, never the base tables.
 
 CREATE SCHEMA IF NOT EXISTS analytics;
 CREATE SCHEMA IF NOT EXISTS audit;   -- append-only guard/query log; chatbot_ro has no grants here at all
 
 SET search_path = analytics, public;
 
--- Postgres ships pg_trgm for the fuzzy value index (Phase 04).
+-- Powers the fuzzy value index (api/app/schema/value_index.py).
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- ---------------------------------------------------------------------------
@@ -164,12 +155,8 @@ CREATE TABLE analytics.campaign_events (
     occurred_at     timestamptz NOT NULL
 );
 
--- ---------------------------------------------------------------------------
--- The trap: a legacy denormalized table that still has rows.
--- Never granted to chatbot_ro, never listed in semantic/catalog.yml's
--- allowed join paths — it exists so the eval harness can catch a model that
--- discovers it via schema retrieval and joins on it anyway.
--- ---------------------------------------------------------------------------
+-- The trap: a legacy denormalized table that still has rows. Never
+-- granted to chatbot_ro, never in semantic/catalog.yml's join paths.
 
 CREATE TABLE analytics.legacy_orders_flat (
     order_id        bigint PRIMARY KEY,
@@ -204,23 +191,14 @@ CREATE INDEX idx_support_customer       ON analytics.support_tickets(customer_id
 CREATE INDEX idx_campaign_events_camp   ON analytics.campaign_events(campaign_id);
 CREATE INDEX idx_campaign_events_cust   ON analytics.campaign_events(customer_id);
 
--- ---------------------------------------------------------------------------
--- Views — this is the surface chatbot_ro is actually granted.
--- Each pre-filters soft-deleted rows and exposes only the columns the
--- semantic layer sanctions, so the model cannot see what it isn't supposed
--- to use even if it hallucinates a request for it.
--- ---------------------------------------------------------------------------
-
--- Tenant scoping lives in the view's own WHERE clause, not in RLS on the
--- base table. Views execute with the OWNER's privileges by default, and
--- the schema owner here is a superuser (or at minimum the table owner) —
--- both bypass row-level security unconditionally, FORCE ROW LEVEL SECURITY
--- included. RLS on the base tables (below) is still enabled as a backstop
--- for any future role that gets direct table access, but it is not what
--- protects chatbot_ro, which only ever goes through these views. The
--- filter below is: current_setting(..., true) returns NULL when
--- app.tenant_id was never set, so `tenant_id = NULL` is NULL (not true)
--- for every row — an unset tenant sees zero rows, not every tenant's.
+-- Views — the surface chatbot_ro is actually granted; each pre-filters
+-- soft-deleted rows and exposes only sanctioned columns.
+--
+-- Tenant scoping lives in the view's own WHERE clause, not RLS: views run
+-- with the owner's privileges, and a superuser owner bypasses RLS
+-- unconditionally (FORCE ROW LEVEL SECURITY included) — see db/02_roles.sql.
+-- current_setting(..., true) is NULL when app.tenant_id was never set, so
+-- the filter fails closed: an unset tenant sees zero rows, not every tenant's.
 
 CREATE VIEW analytics.v_customers AS
     SELECT id, tenant_id, name, email, region, state, country, signup_at

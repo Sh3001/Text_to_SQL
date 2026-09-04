@@ -1,10 +1,6 @@
-"""Shared fixtures for the Phase 02 schema-intelligence tests.
-
-Guard tests (Phase 01) need no database and must never be skipped — that
-was the whole point of building the guard before the generator. Schema
-tests are different: they verify introspection against a real, live
-querywarden database, so they skip cleanly (not fail) when one isn't
-reachable, matching how CI vs. local-with-Docker environments will differ.
+"""Shared fixtures. Guard tests need no database and must never be
+skipped; schema/pipeline tests verify against a real querywarden
+database, so they skip cleanly (not fail) when one isn't reachable.
 """
 
 from __future__ import annotations

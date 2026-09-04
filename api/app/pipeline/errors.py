@@ -1,17 +1,7 @@
 """The error taxonomy — every failure this pipeline can hit, named once,
-each mapped to exactly one recovery action. This is the table from the
-project plan's "Error handling" section, made real: the distinction that
-matters throughout is which failures are worth another model turn
-(REPAIR) and which are not (BLOCK, ASK, GIVE_UP are all terminal for this
-question — a security violation, an ambiguous question, and an exhausted
-repair budget all deserve different endings, but none of them loop back
-into generation with the failure as a hint).
-
-Adapted from the plan for the actual backend in use: Claude's `stop_reason
-== "refusal"` has no Ollama equivalent (Ollama has no distinct safety-
-classifier refusal concept), so that row is folded into ModelUnavailable/
-ModelResponse — see llm/client.py's exception hierarchy, which this module
-classifies rather than duplicates.
+each mapped to exactly one recovery action: which failures are worth
+another model turn (REPAIR) vs. terminal (BLOCK/ASK/GIVE_UP, none of
+which loop back into generation with the failure as a hint).
 """
 
 from __future__ import annotations
@@ -64,10 +54,8 @@ ACTION_FOR_KIND: dict[FailureKind, Action] = {
     FailureKind.MODEL_OUTPUT_INVALID: Action.REPAIR,
 }
 
-#: Mirrors guards/errors.py's TERMINAL_REASONS at this taxonomy's level —
-#: a guard rejection in this set is BLOCK regardless of what ACTION_FOR_KIND
-#: says for UNKNOWN_IDENTIFIER/SYNTAX_ERROR, because it's the *reason*, not
-#: the surface FailureKind, that determines terminality here.
+#: Mirrors guards/errors.py's TERMINAL_REASONS — a rejection in that set
+#: is BLOCK regardless of what ACTION_FOR_KIND says for the surface kind.
 _GUARD_REASON_TO_KIND: dict[RejectReason, FailureKind] = {
     RejectReason.SYNTAX_ERROR: FailureKind.SYNTAX_ERROR,
     RejectReason.EMPTY_STATEMENT: FailureKind.SYNTAX_ERROR,
@@ -83,10 +71,8 @@ _GUARD_REASON_TO_KIND: dict[RejectReason, FailureKind] = {
 
 def classify_guard_rejection(reason: RejectReason, terminal: bool) -> tuple[FailureKind, Action]:
     kind = _GUARD_REASON_TO_KIND.get(reason, FailureKind.SYNTAX_ERROR)
-    # `terminal` from the guard itself is authoritative (guards/errors.py
-    # TERMINAL_REASONS) — trust it over the static table above in case the
-    # two taxonomies ever drift, rather than silently retrying a security
-    # violation because this module's mapping fell out of sync.
+    # `terminal` from the guard is authoritative — trust it over the
+    # static table in case the two taxonomies drift.
     action = Action.BLOCK if terminal else ACTION_FOR_KIND[kind]
     return kind, action
 

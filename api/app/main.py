@@ -1,8 +1,6 @@
-"""Query Warden API — FastAPI app. PipelineContext (the introspected
-schema snapshot + value index) is built once at startup, not per
-request: introspection and value-index construction are real DB round
-trips, and the design doc's own guidance is to render the full cached
-schema block once and reuse it, not re-derive it per question.
+"""Query Warden API — FastAPI app. PipelineContext (schema snapshot +
+value index) is built once at startup, not per request — introspection
+and value-index construction are real DB round trips.
 """
 
 from __future__ import annotations
@@ -24,9 +22,8 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@lo
 async def lifespan(app: FastAPI):
     with psycopg.connect(DATABASE_URL) as conn:
         app.state.ctx = build_context(conn)
-    # Pending plan_id -> PlanResult, awaiting a human's approve/reject —
-    # see api/routes.py's module docstring for why this is in-memory
-    # rather than the design doc's query_runs table.
+    # Pending plan_id -> PlanResult, awaiting approve/reject — in-memory,
+    # see api/routes.py's module docstring for why.
     app.state.pending_plans = {}
     yield
 

@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Rebuild querywarden from scratch against a local Postgres — the path used
-# during development when Docker wasn't available. `docker compose up` is
-# the documented path (see repo root README.md); this is the equivalent
-# for a Postgres already running on localhost (e.g. Postgres.app).
+# Rebuild querywarden against a local Postgres (e.g. Postgres.app).
+# `docker compose up` is the documented path — see repo root README.md.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 

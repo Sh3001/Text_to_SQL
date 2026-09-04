@@ -1,12 +1,6 @@
-"""Renders a Snapshot into the compact DDL text that goes in the model's
-system prompt — behind the prompt-cache breakpoint (see the project plan's
-cache layout). Determinism is the entire point of this module: the same
-Snapshot must render to the same bytes every time, or every cache read
-misses and the bill triples silently. That's why every loop below iterates
-a tuple that was sorted at introspection time rather than a dict/set, and
-why row counts are pre-bucketed (see introspect._row_magnitude) instead of
-rendered as raw, drifting reltuples.
-"""
+"""Renders a Snapshot into the compact DDL text for the model's system
+prompt. Determinism is the whole point: the same Snapshot must render to
+the same bytes every time, or the prompt cache misses silently."""
 
 from __future__ import annotations
 
@@ -19,9 +13,7 @@ def render(snapshot: Snapshot) -> str:
         "",
     ]
 
-    # Sorted here, defensively, rather than trusting the caller to have
-    # sorted at introspection time — determinism is this module's one job,
-    # so it shouldn't depend on an invariant it can't itself verify.
+    # Sorted defensively rather than trusting the caller.
     for rel in sorted(snapshot.relations, key=lambda r: r.name):
         if rel.comment:
             lines.append(f"-- {rel.comment}")
@@ -52,14 +44,9 @@ def render(snapshot: Snapshot) -> str:
                     f"  FOREIGN KEY ({fk.column}) REFERENCES {snapshot.schema}.{ref_view}({fk.ref_column})"
                 )
             else:
-                # The base table this FK points to (e.g. tenants) was never
-                # given a chatbot-facing view — rendering the FK anyway
-                # would point the model at a join target it can never
-                # reach, which is worse than not mentioning the
-                # relationship at all. See render.py's test for the bug
-                # this guards: v_orders.tenant_id -> tenants(id) rendered
-                # as "REFERENCES analytics.v_tenants(id)" before this
-                # check existed, and no such view exists.
+                # The base table this FK points to has no chatbot-facing
+                # view — pointing the model at an unreachable join target
+                # is worse than not mentioning the relationship at all.
                 lines.append(
                     f"  -- {fk.column} references analytics.{fk.ref_relation}, an internal table not exposed to this pipeline"
                 )

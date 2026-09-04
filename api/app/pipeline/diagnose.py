@@ -1,15 +1,9 @@
-"""Zero-row selectivity diagnostic — the plan's own accounting names this
-the single largest source of zero-row results, and the fix is mechanical:
-re-run each of the query's WHERE-clause predicates cumulatively and report
-the one that emptied the result, rather than making the user guess which
-of five AND'd conditions was the culprit.
-
-Built from the AST, not string surgery: pglast's Visitor confirmed
-(during Phase 01 build/verification) that Postgres represents a chain of
-AND conditions as a left-associative BoolExpr tree, so splitting it is a
-straightforward walk, and every candidate diagnostic query is a real
-SelectStmt node re-deparsed by the same RawStream the guard itself trusts
-— never an f-string assembling clauses by hand.
+"""Zero-row selectivity diagnostic: re-runs a query's WHERE-clause
+predicates cumulatively and reports the one that emptied the result,
+rather than making the user guess which of several AND'd conditions was
+the culprit. Built from the AST (a chain of ANDs is a left-associative
+BoolExpr tree) — every candidate query is a real SelectStmt re-deparsed
+by the same RawStream the guard trusts, never an f-string.
 """
 
 from __future__ import annotations

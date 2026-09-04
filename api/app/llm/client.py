@@ -1,24 +1,12 @@
-"""Thin wrapper around the local Ollama model. Isolated in its own module
-so the rest of the pipeline depends on `generate()`'s signature, not on
-Ollama's specific request/response shapes — swapping the backend later
-(a hosted API, a different local model) means changing this file only.
+"""Thin wrapper around the local Ollama model, isolated so swapping the
+backend later means changing this file only. Structured output is
+JSON-schema-constrained decoding (Ollama's `format` parameter) — the
+model can't emit a token sequence that violates SqlPlan's shape.
 
-Structured output is JSON-schema-constrained decoding (Ollama's `format`
-parameter, verified against the actual running server — see the Phase 03
-build notes), not a hand-parsed convention: the model literally cannot
-emit a token sequence that violates SqlPlan's shape. Free-text parsing of
-a code fence was deliberately never on the table.
-
-Exceptions are a most-specific-first chain (the same principle the
-Anthropic SDK's NotFoundError/RateLimitError/APIStatusError/
-APIConnectionError chain follows, adapted to what Ollama actually raises
-— verified directly: an unreachable server raises a plain built-in
-ConnectionError, a missing/misspelled model raises ollama.ResponseError
-with status_code=404), because the pipeline needs to treat them
-differently: ModelUnavailableError means the environment is broken and
-retrying the same request won't help; OutputParseError means the model's
-own output was malformed, which the bounded repair loop (Phase 04) CAN
-usefully retry by feeding the parse error back.
+Exceptions are a most-specific-first chain: ModelUnavailableError means
+the environment is broken (retrying won't help); OutputParseError means
+malformed model output, which the repair loop CAN usefully retry by
+feeding the parse error back.
 """
 
 from __future__ import annotations
@@ -78,8 +66,8 @@ def generate(
 ) -> GenerationResult:
     """One generation call. Low temperature by default — this is SQL
     synthesis against a fixed schema, not creative writing; determinism
-    matters more than variety, and the eval harness (Phase 05) needs
-    reproducible-enough behavior to be meaningful run to run.
+    matters more than variety, and the eval harness needs reproducible-
+    enough behavior to be meaningful run to run.
     """
     schema = SqlPlan.model_json_schema()
     try:

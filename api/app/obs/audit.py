@@ -1,15 +1,10 @@
-"""Writes audit.query_log — one row per question the pipeline answers,
-whatever the verdict. Uses the application's own trusted connection,
-never chatbot_ro, which has zero grants on the audit schema by design
-(db/02_roles.sql, present since Phase 00) — the same trust boundary
-introspection and the value index already use: the guarded pipeline
-should never be able to read, let alone tamper with, its own audit
-trail, even if every layer above this one were somehow compromised.
+"""Writes audit.query_log — one row per question, whatever the verdict.
+Uses the app's own trusted connection, never chatbot_ro (zero grants on
+the audit schema by design — db/02_roles.sql).
 
-Scoped to the API surface deliberately, not the CLI or the eval
-harness: this table is the running service's real activity trail, and
-logging every CLI smoke-test or eval run into it would drown real
-traffic in test noise. See api/app/api/routes.py for the only call sites.
+Scoped to the API surface deliberately, not the CLI or eval harness:
+this table is the running service's real activity trail, and test runs
+would drown it in noise. See api/app/api/routes.py for the call sites.
 """
 
 from __future__ import annotations
@@ -34,11 +29,8 @@ def log_query_run(
     edited: bool = False,
     database_url: str | None = None,
 ) -> uuid.UUID:
-    """Fire-and-forget from the caller's perspective (routes.py doesn't
-    let a logging failure affect the response already streamed to the
-    user) but never silent here — a write failure raises, and the
-    caller decides whether to swallow it.
-    """
+    """Never silent here — a write failure raises; the caller (routes.py)
+    decides whether to swallow it."""
     request_id = request_id or uuid.uuid4()
     plan = outcome.plan
     execution = outcome.execution

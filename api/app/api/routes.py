@@ -1,25 +1,13 @@
-"""HTTP surface. Two SSE endpoints implement the design doc's approval
-gate: POST /api/query runs generate -> guard -> budget (plan.plan()) and
-either auto-executes when the model's own confidence is "high", or
-pauses and streams an `awaiting_approval` event carrying the SQL for a
-human to read and approve — never silently executing a medium/low
--confidence guess. POST /api/query/approve resumes a paused plan,
-optionally with human-edited SQL, which is re-guarded exactly like model
-output before it runs (editing SQL is not a privileged path).
+"""HTTP surface. POST /api/query runs generate -> guard -> budget and
+either auto-executes at "high" confidence, or pauses and streams an
+`awaiting_approval` event for a human to read and approve. POST
+/api/query/approve resumes a paused plan, optionally with human-edited
+SQL, re-guarded exactly like model output.
 
-Pending plans live in an in-memory dict (app.state.pending_plans),
-keyed by a UUID — not a Postgres table. A real deployment needs one so a
-plan survives a server restart; this is a real, named gap, not an
-oversight (see README's Phase 07 section). Terminal outcomes ARE
-persisted, though — every answered/ask/block/diagnose/give_up verdict
-is written to audit.query_log (obs/audit.py) once the SSE stream
-finishes; it's specifically the not-yet-resolved pause state that isn't.
-
-Every terminal outcome (answered, ask, block, diagnose, give_up) gets
-logged to audit.query_log (obs/audit.py) after the SSE stream finishes
-— never before, so a slow write can't delay what the user already saw.
-GET /api/stats and GET /api/audit read that same table back for the
-dashboard and the audit-log view.
+Pending plans live in an in-memory dict (app.state.pending_plans), not
+Postgres — a known gap, see README; terminal outcomes ARE persisted to
+audit.query_log after each SSE stream finishes. GET /api/stats and
+GET /api/audit read that table back.
 """
 
 from __future__ import annotations
@@ -51,9 +39,8 @@ class ApproveRequest(BaseModel):
 
 
 def _log_safely(outcome, tenant_id: int, model: str, edited: bool = False) -> None:
-    # A logging failure must never surface as a failure of the request
-    # that already streamed its real answer to the user — swallowed
-    # here, deliberately, after the response is already complete.
+    # A logging failure must never surface as a failure of the already
+    # -streamed request — swallowed here, deliberately.
     try:
         log_query_run(outcome, tenant_id=tenant_id, model=model, edited=edited)
     except Exception as exc:  # noqa: BLE001
@@ -106,10 +93,8 @@ async def query(req: QueryRequest, request: Request) -> StreamingResponse:
             return
 
         if plan_result.plan.confidence == "high":
-            # High confidence — run immediately, same stream, no approval
-            # round trip. Medium/low always pause (see approval gate note
-            # above); a future cost-based trigger ("over the plan-cost
-            # threshold" even at high confidence) is deferred — see README.
+            # Medium/low always pause. A future cost-based trigger even
+            # at high confidence is deferred — see README.
             def do_finish(on_event):
                 return answer_module.finish(plan_result, tenant_id=req.tenant_id, on_event=on_event, catalog=ctx.catalog)
 
@@ -161,10 +146,8 @@ async def approve(req: ApproveRequest, request: Request) -> StreamingResponse:
 
 @router.post("/api/query/{plan_id}/reject")
 async def reject(plan_id: str, request: Request) -> dict:
-    # Not logged to audit.query_log — a discarded, never-executed plan is
-    # lower-stakes than one of the five real verdicts the table's CHECK
-    # constraint models, and adding a sixth just for this felt like more
-    # schema than the case warrants (see README's Phase 07 section).
+    # Not logged to audit.query_log — a discarded plan is lower-stakes
+    # than the table's five real verdicts (see README).
     request.app.state.pending_plans.pop(plan_id, None)
     return {"status": "discarded"}
 

@@ -1,8 +1,6 @@
 // Native EventSource only supports GET, and every endpoint here needs a
-// JSON body (the question, the plan_id to approve) — so this parses the
-// SSE wire format by hand from a POSTed fetch()'s streamed response body,
-// rather than reaching for an EventSource polyfill for a shape it was
-// never going to support anyway.
+// JSON body — so this parses the SSE wire format by hand from a POSTed
+// fetch()'s streamed response body.
 
 export type SSEEvent = { event: string; data: any };
 
@@ -37,9 +35,7 @@ export async function* streamSSE(
       buffer += decoder.decode(value, { stream: true });
 
       let boundary: number;
-      // One SSE event ends at the first blank line — everything before
-      // it is "event: x\ndata: y" (data may itself contain no newlines
-      // here since json.dumps on the server never emits raw ones).
+      // One SSE event ends at the first blank line.
       while ((boundary = buffer.indexOf("\n\n")) !== -1) {
         const rawEvent = buffer.slice(0, boundary);
         buffer = buffer.slice(boundary + 2);
