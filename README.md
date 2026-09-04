@@ -137,14 +137,6 @@ pipeline can hit, mapped to one recovery action. Unsafe SQL is never
 repaired, since feeding a blocked attempt back to the model is coaching
 it. Timeouts are never retried.
 
-## Why Ollama and not Claude
-
-No Anthropic API key was available, so generation runs on a local
-`qwen2.5-coder:3b` through JSON-schema-constrained decoding, which gives
-the same structured-output guarantee. The hard-tier accuracy above is a
-direct consequence. Swapping in a hosted model means rewriting
-`api/app/llm/client.py` and nothing else.
-
 ## Known limitations
 
 - **Wrong but valid SQL isn't detectable here.** A query can pass every
