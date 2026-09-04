@@ -137,25 +137,6 @@ pipeline can hit, mapped to one recovery action. Unsafe SQL is never
 repaired, since feeding a blocked attempt back to the model is coaching
 it. Timeouts are never retried.
 
-## Known limitations
-
-- **Wrong but valid SQL isn't detectable here.** A query can pass every
-  check, run fast, and return plausible numbers that are wrong. There's a
-  measured case where a fan-out join triple-counted refunds. Only a human
-  or a golden answer catches that.
-- **No authentication.** `tenant_id` currently comes from the request
-  body, so the tenant isolation described above can be bypassed by
-  sending a different number. Fixing this means deriving the tenant from
-  a verified session.
-- **Pending approvals are in-memory** (`app.state.pending_plans`), so
-  they don't survive a restart and the API can't run more than one
-  replica.
-- **No conversation history.** Every question is independent.
-- **The guard checks table names, not column names.** Unknown columns are
-  caught by Postgres at execution and fixed by the repair loop.
-- **Docker Compose only brings up Postgres.** The `api` and `web`
-  services reference Dockerfiles that don't exist yet.
-
 ## More
 
 - [`eval/README.md`](eval/README.md) — the three suites and how grading works
