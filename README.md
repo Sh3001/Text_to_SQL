@@ -72,6 +72,31 @@ Phone numbers are normalised to E.164 before any lookup, so
 account. A leading zero on a bare national number is treated as the trunk
 prefix and dropped.
 
+### Forgotten passwords
+
+`Forgot your password?` on the sign-in screen prepares a reset. With no
+mail or SMS provider wired up, an operator hands the link over:
+
+```bash
+cd api && ../.venv/bin/python -m app.auth.cli reset-password them@example.com
+```
+
+That prints a single-use link valid for an hour. Following it opens the
+reset screen with the token filled in. Requesting a reset over HTTP always
+answers the same way whether or not the account exists, so the route can't
+be used to find out who has one; the CLI does say, because an operator
+already knows.
+
+Signed-in users can change their own password with `POST
+/api/auth/password/change`, which requires the current one.
+
+Both paths stamp `app.users.password_changed_at`, and every session token
+pins that value — so a reset or a change signs out **every other session
+immediately** rather than leaving a stolen one alive for the token's
+remaining 12 hours. That costs one small query per authenticated request,
+which is the strongest argument for adding the connection pool named
+below.
+
 One honest limit: signing up doesn't verify the address or number you
 typed — there's no confirmation step, so you could register someone
 else's. Closing that needs an email/SMS provider, which this project
@@ -141,10 +166,11 @@ $PSQL "SET app.tenant_id='1'; SELECT count(*) FROM analytics.v_orders"
 cd api && ../.venv/bin/python -m pytest
 ```
 
-313 tests. Guard and schema tests need neither a database nor a model.
+335 tests. Guard and schema tests need neither a database nor a model.
 Integration tests skip when Postgres or Ollama isn't reachable.
-`test_auth.py` and `test_history.py` cover the auth boundaries, including
-that a `tenant_id` in a request body is ignored.
+`test_auth.py`, `test_password_reset.py` and `test_history.py` cover the
+auth boundaries — that a `tenant_id` in a request body is ignored, and
+that a reset kills sessions issued in the same second it happens.
 
 ## Evaluation
 
@@ -176,7 +202,7 @@ and makes the SQL editable.
 ## Layout
 
 ```
-db/            schema, seed, roles, audit table, users, history
+db/            schema, seed, roles, audit table, users, history, resets
 semantic/      business glossary and canonical metric SQL (hand-maintained)
 api/app/
   auth/        identifiers, password hashing, tokens, route dependencies

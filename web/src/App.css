@@ -1200,3 +1200,56 @@
   line-height: 1.5;
 }
 
+
+/* ---- password reset ---- */
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.forgot-row {
+  margin: -6px 0 0;
+  text-align: right;
+  font-size: 12.5px;
+}
+
+.signin-back {
+  display: block;
+  margin: 0 0 14px;
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.signin-back:hover {
+  color: var(--accent);
+}
+
+.signin-sent-note {
+  margin: 0 0 16px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.signin-notice {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  color: var(--warn);
+  font-size: 12.5px;
+  line-height: 1.5;
+}

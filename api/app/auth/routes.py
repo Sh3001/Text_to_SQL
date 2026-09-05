@@ -21,7 +21,7 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from . import identifiers, store
+from . import identifiers, reset, store
 from .deps import Principal, current_principal, require_operator
 from .security import issue_token
 
@@ -101,7 +101,9 @@ def _to_response(user: store.User) -> UserResponse:
 
 
 def _token_response(user: store.User) -> TokenResponse:
-    token, expires_in = issue_token(user.id, user.tenant_id, user.role, user.email)
+    token, expires_in = issue_token(
+        user.id, user.tenant_id, user.role, user.email, user.password_changed_at
+    )
     return TokenResponse(access_token=token, expires_in=expires_in, user=_to_response(user))
 
 
@@ -186,3 +188,101 @@ async def create_user(
     except store.DuplicateEmailError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return _to_response(user)
+
+
+# ---------------------------------------------------------------------------
+# Password reset
+#
+# There is no mail or SMS provider wired up (see README), so a reset is
+# generated here and handed over by an operator rather than emailed. The
+# token machinery is delivery-agnostic: adding a sender later means
+# delivering the same token and changing nothing below.
+# ---------------------------------------------------------------------------
+
+class ForgotPasswordRequest(BaseModel):
+    identifier: str = Field(description="The email address or phone number on the account.")
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH)
+
+
+@router.post("/password/forgot", status_code=status.HTTP_202_ACCEPTED)
+async def forgot_password(req: ForgotPasswordRequest) -> dict:
+    """Always answers the same way, whether or not the account exists.
+    Anything else turns this into a "who has an account here" oracle, and
+    that matters more than telling an honest user they typed it wrong."""
+    generic = {
+        "status": "accepted",
+        "message": (
+            "If that account exists, a reset has been prepared. "
+            "This instance has no email or SMS delivery configured, so ask an "
+            "operator for your reset link."
+        ),
+    }
+
+    try:
+        destination, _channel = identifiers.normalize(req.identifier)
+    except identifiers.IdentifierError:
+        return generic  # not even well-formed; say nothing different
+
+    user = store.get_by_destination(destination)
+    if user is None:
+        return generic
+
+    issued = reset.issue(user.id)
+    # The operator's copy. Deliberately loud, and deliberately the only
+    # place the token is ever legible.
+    print(
+        f"\n[password reset] for {identifiers.mask(destination, _channel)}\n"
+        f"  token: {issued.token}\n"
+        f"  expires: {issued.expires_at.isoformat()}\n"
+        f"  hand this to them, or send the link: /reset?token={issued.token}\n"
+    )
+    return generic
+
+
+@router.post("/password/reset", response_model=TokenResponse)
+async def reset_password(req: ResetPasswordRequest) -> TokenResponse:
+    outcome = reset.consume(req.token)
+    if not outcome.ok:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=outcome.reason)
+
+    if not store.set_password(outcome.user_id, req.new_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="that account no longer exists"
+        )
+
+    user = store.get_by_id(outcome.user_id)  # re-read for the new pin
+    # Signed straight in: they've just proved control of the reset token
+    # and set a password, so making them retype it immediately adds
+    # nothing. Every OTHER session is now dead (auth/deps.py).
+    return _token_response(user)
+
+
+@router.post("/password/change", response_model=TokenResponse)
+async def change_password(
+    req: ChangePasswordRequest, principal: Principal = Depends(current_principal)
+) -> TokenResponse:
+    """Changing a password requires proving you know the current one, so
+    a walked-away-from laptop can't be used to lock the owner out."""
+    user = store.get_by_id(principal.user_id)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="account no longer exists")
+
+    identifier = user.email or user.phone
+    if identifier is None or store.authenticate(identifier, req.current_password) is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="that isn't your current password"
+        )
+
+    store.set_password(user.id, req.new_password)
+    # Re-read: the fresh token has to pin the NEW password_changed_at, or
+    # it would be refused by the very check it just triggered.
+    return _token_response(store.get_by_id(user.id))

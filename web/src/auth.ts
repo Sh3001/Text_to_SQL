@@ -95,6 +95,36 @@ export async function signup(
   return res.user;
 }
 
+/** Always resolves with the same generic message whether or not the
+ *  account exists — the server deliberately won't say. */
+export async function forgotPassword(identifier: string): Promise<{ message: string }> {
+  return postJSON<{ message: string }>("/api/auth/password/forgot", { identifier });
+}
+
+/** Consumes a reset token and signs the user straight in. */
+export async function resetPassword(token: string, newPassword: string): Promise<User> {
+  const res = await postJSON<TokenResponse>("/api/auth/password/reset", {
+    token,
+    new_password: newPassword,
+  });
+  store(res.access_token, res.user);
+  return res.user;
+}
+
+/** Requires the current password. Returns a fresh token, because every
+ *  session issued before the change — including this one — is now dead. */
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<User> {
+  const res = await postJSON<TokenResponse>("/api/auth/password/change", {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
+  store(res.access_token, res.user);
+  return res.user;
+}
+
 export async function authConfig(): Promise<AuthConfig> {
   const resp = await fetch(`${API_URL}/api/auth/config`);
   if (!resp.ok) throw new Error(`API unreachable (${resp.status})`);

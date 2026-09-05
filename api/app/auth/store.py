@@ -28,6 +28,7 @@ class User:
     tenant_id: int
     role: str
     phone: str | None = None
+    password_changed_at: object | None = None
 
     @property
     def is_operator(self) -> bool:
@@ -40,13 +41,17 @@ class User:
         return self.display_name or self.email or self.phone or f"user {self.id}"
 
 
-_SELECT = "SELECT id, email, display_name, tenant_id, role, phone FROM app.users"
+_SELECT = (
+    "SELECT id, email, display_name, tenant_id, role, phone, password_changed_at "
+    "FROM app.users"
+)
 
 
 def _row_to_user(row) -> User:
     return User(
         id=row[0], email=row[1], display_name=row[2],
         tenant_id=row[3], role=row[4], phone=row[5],
+        password_changed_at=row[6] if len(row) > 6 else None,
     )
 
 
@@ -71,7 +76,7 @@ def create_user(
                     """
                     INSERT INTO app.users (email, password_hash, display_name, tenant_id, role, phone)
                     VALUES (%s, %s, %s, %s, %s, %s)
-                    RETURNING id, email, display_name, tenant_id, role, phone
+                    RETURNING id, email, display_name, tenant_id, role, phone, password_changed_at
                     """,
                     (
                         email.strip() if email else None,
@@ -135,7 +140,8 @@ def authenticate(identifier: str, password: str, database_url: str | None = None
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, email, display_name, tenant_id, role, phone, password_hash
+                SELECT id, email, display_name, tenant_id, role, phone,
+                       password_changed_at, password_hash
                 FROM app.users WHERE lower(email) = lower(%s) OR phone = %s
                 """,
                 (destination, destination),
@@ -147,7 +153,7 @@ def authenticate(identifier: str, password: str, database_url: str | None = None
         verify_password(password, hash_password("dummy"))
         return None
 
-    stored_hash = row[6]
+    stored_hash = row[7]
     if stored_hash is None:
         # An account row with no password set. Not worth distinguishing —
         # from the caller's side it's simply a failed login.
@@ -156,6 +162,34 @@ def authenticate(identifier: str, password: str, database_url: str | None = None
     if not verify_password(password, stored_hash):
         return None
     return _row_to_user(row)
+
+
+def set_password(user_id: int, password: str, database_url: str | None = None) -> bool:
+    """Sets a new password and stamps password_changed_at, which is what
+    invalidates sessions issued before now (see auth/deps.py)."""
+    with psycopg.connect(database_url or app_database_url()) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE app.users
+                SET password_hash = %s, password_changed_at = now()
+                WHERE id = %s
+                """,
+                (hash_password(password), user_id),
+            )
+            updated = cur.rowcount == 1
+        conn.commit()
+    return updated
+
+
+def password_changed_at(user_id: int, database_url: str | None = None):
+    """Returns the timestamp, or None if the user is gone. Read on every
+    authenticated request — see auth/deps.py for the cost note."""
+    with psycopg.connect(database_url or app_database_url()) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT password_changed_at FROM app.users WHERE id = %s", (user_id,))
+            row = cur.fetchone()
+    return row[0] if row else None
 
 
 def count_users(database_url: str | None = None) -> int:

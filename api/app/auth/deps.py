@@ -50,18 +50,52 @@ async def current_principal(authorization: str | None = Header(default=None)) ->
         ) from exc
 
     try:
-        return Principal(
+        principal = Principal(
             user_id=int(claims["sub"]),
             email=claims["email"],
             tenant_id=int(claims["tenant_id"]),
             role=claims["role"],
         )
+        password_pin = claims["pwd_at"]
     except (KeyError, ValueError, TypeError) as exc:
         # A correctly-signed token with the wrong shape means the signing
         # key is shared with something that isn't this app. Refuse it.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="malformed token payload"
         ) from exc
+
+    _reject_if_password_changed(principal.user_id, password_pin)
+    return principal
+
+
+def _reject_if_password_changed(user_id: int, password_pin: str | None) -> None:
+    """Cuts every other session loose when a password changes.
+
+    Tokens here are stateless, so without this check a stolen session
+    would survive a reset for the token's full 12-hour life — precisely
+    the moment the victim most expects to be safe. That is worth one
+    small query per authenticated request, and it is the strongest
+    argument for the connection pool named in the deployment notes, since
+    every request currently opens its own connection.
+
+    The comparison is an exact match on the pinned timestamp, not `iat`
+    against the clock: `iat` is whole seconds, so a reset and a login in
+    the same second are indistinguishable by time and the old session
+    would survive. A token with no pin at all predates this check and is
+    refused rather than trusted — failing closed costs one sign-in.
+    """
+    from . import store
+
+    changed_at = store.password_changed_at(user_id)
+    if changed_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="account no longer exists"
+        )
+    if password_pin is None or password_pin != changed_at.isoformat():
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="your password changed — please sign in again",
+        )
 
 
 async def require_operator(principal: Principal = Depends(current_principal)) -> Principal:

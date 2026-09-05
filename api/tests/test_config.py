@@ -13,22 +13,31 @@ import pytest
 
 from app.config import load_env
 
-# Anything a test asserts on has to be cleared first. app.main calls
-# load_env() at import time, so by the time these run the ambient
-# environment may already hold values from a real api/.env — and
-# load_env deliberately refuses to overwrite those. Clearing here keeps
-# the tests hermetic rather than dependent on whether a developer has a
-# .env sitting in the repo.
+# These tests are the one place that deliberately mutates os.environ, and
+# load_env() writes whatever keys the fixture file names — which is more
+# than any hand-maintained list would track. A previous version cleared a
+# fixed set of keys, and a test .env containing ALLOW_SIGNUP=false leaked
+# that setting into every later test in the session, closing sign-up and
+# failing a dozen unrelated cases. Snapshot and restore the whole
+# environment instead.
 _KEYS_UNDER_TEST = (
     "JWT_SECRET", "DATABASE_URL", "CORS_ORIGINS", "DEFAULT_COUNTRY_CODE",
-    "SOME_SETTING", "REAL_ONE", "EXPORTED",
+    "ALLOW_SIGNUP", "SOME_SETTING", "REAL_ONE", "EXPORTED",
 )
 
 
 @pytest.fixture(autouse=True)
-def _clear_keys(monkeypatch):
+def _isolated_environment():
+    saved = dict(os.environ)
+    # load_env only sets a key that isn't already present, so anything a
+    # test asserts on has to start absent.
     for key in _KEYS_UNDER_TEST:
-        monkeypatch.delenv(key, raising=False)
+        os.environ.pop(key, None)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
 
 
 def _write(tmp_path, body: str):

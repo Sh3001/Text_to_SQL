@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { authConfig, login, signup } from "../auth";
 import type { AuthConfig, User } from "../types";
+import { ForgotPassword } from "./ForgotPassword";
 
 // An account is identified by an email address or a phone number, so the
 // single field takes either. The server normalises phone numbers, which
@@ -15,6 +16,12 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: User) => void }) {
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A ?reset_token= in the URL means they followed a reset link, so open
+  // straight on the reset screen with the token already filled in.
+  const [resetToken] = useState<string | null>(() =>
+    new URLSearchParams(window.location.search).get("reset_token")
+  );
+  const [forgot, setForgot] = useState(Boolean(resetToken));
 
   useEffect(() => {
     authConfig()
@@ -60,6 +67,25 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: User) => void }) {
           <p className="signin-checking">Connecting…</p>
         </div>
       </div>
+    );
+  }
+
+  if (forgot) {
+    return (
+      <ForgotPassword
+        config={config}
+        initialToken={resetToken ?? undefined}
+        onSignedIn={(user) => {
+          // Clear the token out of the address bar so a reload doesn't
+          // reopen a reset screen for a token that's now spent.
+          window.history.replaceState({}, "", window.location.pathname);
+          onSignedIn(user);
+        }}
+        onBack={() => {
+          window.history.replaceState({}, "", window.location.pathname);
+          setForgot(false);
+        }}
+      />
     );
   }
 
@@ -143,6 +169,14 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: User) => void }) {
               placeholder={isSignup ? `At least ${config.min_password_length} characters` : "••••••••"}
             />
           </label>
+
+          {!isSignup && (
+            <p className="forgot-row">
+              <button type="button" className="link-btn" onClick={() => setForgot(true)}>
+                Forgot your password?
+              </button>
+            </p>
+          )}
 
           {error && <p className="signin-error">{error}</p>}
 

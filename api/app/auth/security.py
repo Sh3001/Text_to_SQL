@@ -86,12 +86,21 @@ def verify_password(password: str, stored: str) -> bool:
 # Tokens
 # ---------------------------------------------------------------------------
 
-def issue_token(user_id: int, tenant_id: int, role: str, email: str) -> tuple[str, int]:
+def issue_token(
+    user_id: int, tenant_id: int, role: str, email: str | None, password_changed_at=None
+) -> tuple[str, int]:
     """Returns (token, expires_in_seconds).
 
     tenant_id is baked into the signed payload deliberately. That is the
     whole point of this module: the tenant a request runs under is now a
     signed claim rather than a field the caller fills in.
+
+    `pwd_at` pins the account's password_changed_at at issue time, and
+    auth/deps.py refuses any token whose pin no longer matches. An exact
+    match is used rather than comparing `iat` against the timestamp,
+    because `iat` has whole-second resolution: a password reset and a
+    login in the same second are indistinguishable by time, so the old
+    session would survive exactly the reset that was meant to kill it.
     """
     expires_at = datetime.now(timezone.utc) + timedelta(hours=TOKEN_TTL_HOURS)
     payload = {
@@ -101,6 +110,7 @@ def issue_token(user_id: int, tenant_id: int, role: str, email: str) -> tuple[st
         "email": email,
         "exp": expires_at,
         "iat": datetime.now(timezone.utc),
+        "pwd_at": password_changed_at.isoformat() if password_changed_at is not None else None,
     }
     return jwt.encode(payload, jwt_secret(), algorithm=_ALGORITHM), TOKEN_TTL_HOURS * 3600
 

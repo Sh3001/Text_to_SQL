@@ -96,9 +96,13 @@ def member_user():
 
 
 def auth_headers_for(user) -> dict[str, str]:
+    """Tokens must carry the password_changed_at pin, or auth/deps.py
+    refuses them — it fails closed on an unpinned token by design."""
     from app.auth.security import issue_token
 
-    token, _ = issue_token(user.id, user.tenant_id, user.role, user.email)
+    token, _ = issue_token(
+        user.id, user.tenant_id, user.role, user.email, user.password_changed_at
+    )
     return {"Authorization": f"Bearer {token}"}
 
 

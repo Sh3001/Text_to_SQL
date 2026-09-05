@@ -72,6 +72,38 @@ def _list(_args) -> int:
     return 0
 
 
+def _reset_password(args) -> int:
+    """Issues a reset token and prints it for an operator to hand over.
+
+    This is the delivery mechanism: no mail or SMS provider is wired up,
+    so a human passes the link along. Unlike the HTTP route, this one DOES
+    say when no such account exists — an operator running it already knows
+    who works here, so the enumeration concern doesn't apply, and a silent
+    no-op would just be confusing.
+    """
+    from .identifiers import IdentifierError, normalize
+    from .reset import issue
+
+    try:
+        destination, _channel = normalize(args.identifier)
+    except IdentifierError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+    user = store.get_by_destination(destination)
+    if user is None:
+        print(f"no account for {destination}", file=sys.stderr)
+        return 1
+
+    issued = issue(user.id)
+    print(f"reset for {user.label} (user {user.id})")
+    print(f"  expires: {issued.expires_at:%Y-%m-%d %H:%M %Z}")
+    print(f"  token:   {issued.token}")
+    print(f"  link:    http://localhost:5173/?reset_token={issued.token}")
+    print("\nHand this over directly. It works once, and any earlier reset is now void.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="app.auth.cli", description="Query Warden account management")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -86,6 +118,13 @@ def main() -> int:
 
     listing = sub.add_parser("list-users", help="list accounts")
     listing.set_defaults(func=_list)
+
+    reset_cmd = sub.add_parser(
+        "reset-password",
+        help="issue a reset link for someone who's locked out",
+    )
+    reset_cmd.add_argument("identifier", help="their email address or phone number")
+    reset_cmd.set_defaults(func=_reset_password)
 
 
     args = parser.parse_args()
