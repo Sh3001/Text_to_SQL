@@ -52,3 +52,79 @@ def _ollama_reachable() -> bool:
 # less than perfectly deterministic — skip cleanly, same as requires_db,
 # rather than fail in an environment with no Ollama server.
 requires_ollama = pytest.mark.skipif(not _ollama_reachable(), reason="Ollama server not reachable")
+
+
+# ---------------------------------------------------------------------------
+# Authentication fixtures
+# ---------------------------------------------------------------------------
+# Routes require a bearer token since auth landed (api/app/auth/). Tests
+# get real tokens from real rows in app.users rather than a stubbed
+# dependency override — the tenant-isolation properties these fixtures
+# exist to prove are exactly what a stub would paper over.
+
+# The app refuses to start without this; tests don't need a real secret,
+# they need a consistent one. Set before app.main is imported anywhere.
+os.environ.setdefault("JWT_SECRET", "test-only-secret-not-for-any-deployment")
+
+TEST_OPERATOR_EMAIL = "pytest-operator@querywarden.example.com"
+TEST_MEMBER_EMAIL = "pytest-member@querywarden.example.com"
+TEST_PASSWORD = "pytest-password-123"
+
+
+def _ensure_user(email: str, role: str, tenant_id: int = 1):
+    """Get-or-create, so a re-run doesn't collide with the previous one."""
+    from app.auth import store
+
+    with psycopg.connect(TEST_DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM app.users WHERE email = %s", (email,))
+        conn.commit()
+    return store.create_user(
+        email=email, password=TEST_PASSWORD, tenant_id=tenant_id,
+        role=role, database_url=TEST_DATABASE_URL,
+    )
+
+
+@pytest.fixture()
+def operator_user():
+    return _ensure_user(TEST_OPERATOR_EMAIL, "operator")
+
+
+@pytest.fixture()
+def member_user():
+    return _ensure_user(TEST_MEMBER_EMAIL, "member")
+
+
+def auth_headers_for(user) -> dict[str, str]:
+    from app.auth.security import issue_token
+
+    token, _ = issue_token(user.id, user.tenant_id, user.role, user.email)
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture()
+def operator_headers(operator_user):
+    return auth_headers_for(operator_user)
+
+
+@pytest.fixture()
+def member_headers(member_user):
+    return auth_headers_for(member_user)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _clean_up_test_accounts():
+    """Sign-up tests mint unique emails so repeated runs don't collide,
+    which would otherwise leave them piling up in app.users. Everything
+    on the reserved example.com test domain goes at the end of a session;
+    conversations cascade with their owner."""
+    yield
+    if not _db_reachable():
+        return
+    try:
+        with psycopg.connect(TEST_DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM app.users WHERE email LIKE %s", ("%@querywarden.example.com",))
+            conn.commit()
+    except Exception:  # noqa: BLE001 — cleanup must never fail a green run
+        pass

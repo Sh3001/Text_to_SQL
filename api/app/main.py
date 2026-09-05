@@ -13,16 +13,31 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.routes import router
+from .auth.routes import router as auth_router
+from .auth.security import jwt_secret
+from .history.routes import router as history_router
 from .pipeline.generate import build_context
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/querywarden")
 
+# Vite's dev server by default; override with a comma-separated list in
+# any environment where the UI isn't served from localhost.
+CORS_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if o.strip()
+]
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail at startup, not on the first login attempt: a missing signing
+    # key is a deployment mistake, and it should stop the boot.
+    jwt_secret()
+
     with psycopg.connect(DATABASE_URL) as conn:
         app.state.ctx = build_context(conn)
-    # Pending plan_id -> PlanResult, awaiting approve/reject — in-memory,
+    # Pending plan_id -> PendingPlan, awaiting approve/reject — in-memory,
     # see api/routes.py's module docstring for why.
     app.state.pending_plans = {}
     yield
@@ -32,11 +47,11 @@ app = FastAPI(title="Query Warden", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    # Vite's dev server default — tightened to a real origin list before
-    # this ever runs anywhere but localhost.
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
+app.include_router(history_router)
 app.include_router(router)

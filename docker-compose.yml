@@ -18,6 +18,7 @@ services:
       - ./db/01_seed.sql:/docker-entrypoint-initdb.d/01_seed.sql:ro
       - ./db/02_roles.sql:/docker-entrypoint-initdb.d/02_roles.sql:ro
       - ./db/03_observability.sql:/docker-entrypoint-initdb.d/03_observability.sql:ro
+      - ./db/04_app.sql:/docker-entrypoint-initdb.d/04_app.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d querywarden"]
       interval: 5s
@@ -41,6 +42,9 @@ services:
       # on Linux, run Ollama with OLLAMA_HOST=0.0.0.0 and use the host's
       # real IP or --add-host instead).
       OLLAMA_HOST: http://host.docker.internal:11434
+      # No default anywhere in the code — the app refuses to start without it.
+      # Generate: python -c 'import secrets; print(secrets.token_urlsafe(48))'
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in your .env or environment}
     ports:
       - "8000:8000"
     volumes:

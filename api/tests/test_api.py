@@ -23,7 +23,8 @@ from app.llm.client import GenerationResult as _GenerationResult
 from app.llm.schemas import SqlPlan
 from app.pipeline import answer as answer_module
 
-from .conftest import TEST_DATABASE_URL, requires_db
+from .conftest import TEST_DATABASE_URL, requires_db  # noqa: F401
+from .conftest import operator_headers, operator_user  # noqa: F401
 
 
 def _gen_result(sql: str, confidence: str = "high") -> _GenerationResult:
@@ -62,7 +63,7 @@ def _iter_sse_events(text: str):
 
 
 @pytest.fixture()
-def client():
+def client(operator_headers):
     # app.main reads DATABASE_URL at import time and TEST_DATABASE_URL
     # (conftest.py) is the same default — no env patching needed as long
     # as that stays true; asserted here so a future drift fails loudly
@@ -71,7 +72,11 @@ def client():
 
     assert DATABASE_URL == TEST_DATABASE_URL, "app.main's DB default drifted from the test default"
 
-    with TestClient(app) as c:
+    # Every route below auth requires a bearer token. Attaching it to the
+    # client keeps the existing tests about what they were about; the
+    # unauthenticated and wrong-role paths get their own tests in
+    # test_auth.py rather than being smuggled in here.
+    with TestClient(app, headers=operator_headers) as c:
         yield c
 
 

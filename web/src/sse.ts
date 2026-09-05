@@ -7,11 +7,12 @@ export type SSEEvent = { event: string; data: any };
 export async function* streamSSE(
   url: string,
   body: unknown,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  extraHeaders: Record<string, string> = {}
 ): AsyncGenerator<SSEEvent> {
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...extraHeaders },
     body: JSON.stringify(body),
     signal,
   });
