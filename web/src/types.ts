@@ -119,7 +119,8 @@ export type AuditEvent = {
 
 export type User = {
   id: number;
-  email: string;
+  email: string | null;
+  phone?: string | null;
   display_name: string | null;
   tenant_id: number;
   role: "member" | "operator";
@@ -155,3 +156,4 @@ export type AuthConfig = {
   signup_enabled: boolean;
   min_password_length: number;
 };
+

@@ -2,12 +2,15 @@ import { useEffect, useState } from "react";
 import { authConfig, login, signup } from "../auth";
 import type { AuthConfig, User } from "../types";
 
+// An account is identified by an email address or a phone number, so the
+// single field takes either. The server normalises phone numbers, which
+// is why "+91 98765 43210" and "09876543210" reach the same account.
 type Mode = "signin" | "signup";
 
 export function SignIn({ onSignedIn }: { onSignedIn: (user: User) => void }) {
   const [config, setConfig] = useState<AuthConfig | null>(null);
   const [mode, setMode] = useState<Mode>("signin");
-  const [email, setEmail] = useState("");
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -18,7 +21,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: User) => void }) {
       .then((c) => {
         setConfig(c);
         // A fresh instance has nothing to sign in to, so open on the
-        // account-creation form rather than a form nobody can satisfy.
+        // account-creation form rather than one nobody can satisfy.
         if (c.setup_required) setMode("signup");
       })
       .catch((err) => {
@@ -40,8 +43,8 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: User) => void }) {
     try {
       const user =
         mode === "signup"
-          ? await signup(email, password, displayName)
-          : await login(email, password);
+          ? await signup(identifier, password, displayName)
+          : await login(identifier, password);
       onSignedIn(user);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -78,8 +81,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: User) => void }) {
         {canSwitch && (
           <div className="signin-tabs" role="tablist">
             <button
-              role="tab"
-              type="button"
+              role="tab" type="button"
               aria-selected={!isSignup}
               className={!isSignup ? "active" : ""}
               onClick={() => switchMode("signin")}
@@ -87,8 +89,7 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: User) => void }) {
               Sign in
             </button>
             <button
-              role="tab"
-              type="button"
+              role="tab" type="button"
               aria-selected={isSignup}
               className={isSignup ? "active" : ""}
               onClick={() => switchMode("signup")}
@@ -119,15 +120,14 @@ export function SignIn({ onSignedIn }: { onSignedIn: (user: User) => void }) {
           )}
 
           <label>
-            <span>Email</span>
+            <span>Email or phone number</span>
             <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              value={identifier}
+              onChange={(e) => setIdentifier(e.target.value)}
               required
               autoFocus
               autoComplete="username"
-              placeholder="you@company.com"
+              placeholder="you@company.com or +91 98765 43210"
             />
           </label>
 

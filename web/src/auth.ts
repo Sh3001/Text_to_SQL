@@ -72,8 +72,9 @@ async function postJSON<T>(path: string, body: unknown): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-export async function login(email: string, password: string): Promise<User> {
-  const res = await postJSON<TokenResponse>("/api/auth/login", { email, password });
+/** `identifier` is an email address or a phone number. */
+export async function login(identifier: string, password: string): Promise<User> {
+  const res = await postJSON<TokenResponse>("/api/auth/login", { identifier, password });
   store(res.access_token, res.user);
   return res.user;
 }
@@ -81,12 +82,12 @@ export async function login(email: string, password: string): Promise<User> {
 /** Self-serve account creation. Role and tenant are decided by the
  *  server — deliberately not parameters here. */
 export async function signup(
-  email: string,
+  identifier: string,
   password: string,
   displayName?: string
 ): Promise<User> {
   const res = await postJSON<TokenResponse>("/api/auth/signup", {
-    email,
+    identifier,
     password,
     display_name: displayName || null,
   });

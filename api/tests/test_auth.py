@@ -11,6 +11,8 @@ tenant field on a request model.
 
 from __future__ import annotations
 
+import uuid
+
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
@@ -118,7 +120,7 @@ def test_garbage_token_is_rejected(client):
 @requires_db
 def test_login_succeeds_and_returns_the_users_tenant(client, operator_user):
     resp = client.post(
-        "/api/auth/login", json={"email": operator_user.email, "password": TEST_PASSWORD}
+        "/api/auth/login", json={"identifier": operator_user.email, "password": TEST_PASSWORD}
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -130,10 +132,10 @@ def test_login_succeeds_and_returns_the_users_tenant(client, operator_user):
 @requires_db
 def test_wrong_password_is_rejected_without_revealing_the_account_exists(client, operator_user):
     wrong_password = client.post(
-        "/api/auth/login", json={"email": operator_user.email, "password": "not-it"}
+        "/api/auth/login", json={"identifier": operator_user.email, "password": "not-it"}
     )
     no_such_user = client.post(
-        "/api/auth/login", json={"email": "nobody@querywarden.example.com", "password": "not-it"}
+        "/api/auth/login", json={"identifier": "nobody@querywarden.example.com", "password": "not-it"}
     )
     assert wrong_password.status_code == no_such_user.status_code == 401
     # Identical message: the response must not distinguish the two cases.
@@ -159,7 +161,7 @@ def test_operators_can_read_the_audit_log(client, operator_headers):
 def test_signup_creates_an_account_and_returns_a_token(client, operator_user):
     email = _unique_email("signup-basic")
     resp = client.post(
-        "/api/auth/signup", json={"email": email, "password": "a-good-password"}
+        "/api/auth/signup", json={"identifier": email, "password": "a-good-password"}
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
@@ -167,7 +169,7 @@ def test_signup_creates_an_account_and_returns_a_token(client, operator_user):
     assert body["user"]["email"] == email
     # Signing in with the new account works straight away.
     assert client.post(
-        "/api/auth/login", json={"email": email, "password": "a-good-password"}
+        "/api/auth/login", json={"identifier": email, "password": "a-good-password"}
     ).status_code == 200
 
 
@@ -178,7 +180,7 @@ def test_a_self_served_signup_is_a_member_not_an_operator(client, operator_user)
     operator-created one, gets that."""
     resp = client.post(
         "/api/auth/signup",
-        json={"email": _unique_email("signup-role"), "password": "a-good-password"},
+        json={"identifier": _unique_email("signup-role"), "password": "a-good-password"},
     )
     assert resp.json()["user"]["role"] == "member"
 
@@ -194,7 +196,7 @@ def test_signup_cannot_choose_its_own_role_or_tenant(client, operator_user):
     resp = client.post(
         "/api/auth/signup",
         json={
-            "email": _unique_email("signup-escalate"),
+            "identifier": _unique_email("signup-escalate"),
             "password": "a-good-password",
             "role": "operator",   # ignored
             "tenant_id": 999,     # ignored
@@ -217,7 +219,7 @@ def test_signup_request_model_has_no_role_or_tenant_field():
 @requires_db
 def test_signup_rejects_a_short_password(client, operator_user):
     resp = client.post(
-        "/api/auth/signup", json={"email": _unique_email("signup-short"), "password": "short"}
+        "/api/auth/signup", json={"identifier": _unique_email("signup-short"), "password": "short"}
     )
     assert resp.status_code == 422
 
@@ -226,10 +228,10 @@ def test_signup_rejects_a_short_password(client, operator_user):
 def test_signup_rejects_a_duplicate_email_without_confirming_it_exists(client, operator_user):
     resp = client.post(
         "/api/auth/signup",
-        json={"email": operator_user.email, "password": "a-good-password"},
+        json={"identifier": operator_user.email, "password": "a-good-password"},
     )
     assert resp.status_code == 409
-    # Must not say "that email is registered" — that's an existence oracle.
+    # Must not name the address back — that's an existence oracle.
     assert operator_user.email not in resp.json()["detail"]
 
 
@@ -238,7 +240,7 @@ def test_signup_can_be_closed_by_configuration(client, operator_user, monkeypatc
     monkeypatch.setenv("ALLOW_SIGNUP", "false")
     resp = client.post(
         "/api/auth/signup",
-        json={"email": _unique_email("signup-closed"), "password": "a-good-password"},
+        json={"identifier": _unique_email("signup-closed"), "password": "a-good-password"},
     )
     assert resp.status_code == 403
 
@@ -260,7 +262,7 @@ def test_an_operator_may_still_create_an_operator(client, operator_headers):
     resp = client.post(
         "/api/auth/users",
         headers=operator_headers,
-        json={"email": _unique_email("op-made"), "password": "a-good-password", "role": "operator"},
+        json={"identifier": _unique_email("op-made"), "password": "a-good-password", "role": "operator"},
     )
     assert resp.status_code == 201
     assert resp.json()["role"] == "operator"
@@ -271,7 +273,7 @@ def test_a_member_cannot_create_accounts(client, member_headers):
     resp = client.post(
         "/api/auth/users",
         headers=member_headers,
-        json={"email": "new@querywarden.example.com", "password": "abcdefgh"},
+        json={"identifier": "new@querywarden.example.com", "password": "abcdefgh"},
     )
     assert resp.status_code == 403
 
@@ -349,3 +351,97 @@ def _unique_email(prefix: str) -> str:
     import uuid
 
     return f"{prefix}-{uuid.uuid4().hex[:10]}@querywarden.example.com"
+
+
+# ---------------------------------------------------------------------------
+# Signing up with a phone number instead of an email
+# ---------------------------------------------------------------------------
+
+def _unique_phone() -> str:
+    import uuid
+
+    return f"+1555{uuid.uuid4().int % 10**7:07d}"
+
+
+@requires_db
+def test_you_can_sign_up_with_a_phone_number(client, operator_user):
+    phone = _unique_phone()
+    resp = client.post(
+        "/api/auth/signup", json={"identifier": phone, "password": "a-good-password"}
+    )
+    assert resp.status_code == 201, resp.text
+    user = resp.json()["user"]
+    assert user["phone"] == phone
+    assert user["email"] is None
+    assert user["role"] == "member"
+
+
+@requires_db
+def test_a_phone_account_can_sign_in_with_its_password(client, operator_user):
+    phone = _unique_phone()
+    client.post("/api/auth/signup", json={"identifier": phone, "password": "a-good-password"})
+    resp = client.post(
+        "/api/auth/login", json={"identifier": phone, "password": "a-good-password"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["user"]["phone"] == phone
+
+
+@requires_db
+def test_a_phone_login_accepts_any_formatting_of_the_same_number(client, operator_user):
+    """The stored number is E.164, so the form a person types has to
+    normalise to it or they simply can't get back in."""
+    # First digit 6-9: a real Indian mobile number never starts with 0
+    # after the country code, and normalize_destination deliberately
+    # strips a leading 0 as the national trunk prefix (098765… -> +9198765…).
+    digits = f"{6 + uuid.uuid4().int % 4}{uuid.uuid4().int % 10**9:09d}"
+    client.post(
+        "/api/auth/signup", json={"identifier": f"+91{digits}", "password": "a-good-password"}
+    )
+    for typed in (f"+91 {digits[:5]} {digits[5:]}", f"+91-{digits}", digits):
+        resp = client.post(
+            "/api/auth/login", json={"identifier": typed, "password": "a-good-password"}
+        )
+        assert resp.status_code == 200, f"{typed!r} could not sign in"
+
+
+@requires_db
+def test_signing_up_with_the_same_number_twice_is_refused(client, operator_user):
+    phone = _unique_phone()
+    assert client.post(
+        "/api/auth/signup", json={"identifier": phone, "password": "a-good-password"}
+    ).status_code == 201
+    resp = client.post(
+        "/api/auth/signup", json={"identifier": phone, "password": "a-different-one"}
+    )
+    assert resp.status_code == 409
+
+
+@requires_db
+def test_signup_rejects_a_malformed_identifier(client, operator_user):
+    resp = client.post(
+        "/api/auth/signup", json={"identifier": "not-an-address", "password": "a-good-password"}
+    )
+    assert resp.status_code == 400
+
+
+@requires_db
+def test_a_malformed_login_identifier_is_a_401_not_a_400(client, operator_user):
+    """Junk at login has to look exactly like a wrong password. A 400
+    here would confirm which strings are even shaped like real accounts."""
+    resp = client.post(
+        "/api/auth/login", json={"identifier": "garbage", "password": "whatever"}
+    )
+    assert resp.status_code == 401
+
+
+@requires_db
+def test_an_operator_can_create_a_teammate_by_phone(client, operator_headers):
+    phone = _unique_phone()
+    resp = client.post(
+        "/api/auth/users",
+        headers=operator_headers,
+        json={"identifier": phone, "password": "a-good-password"},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["phone"] == phone

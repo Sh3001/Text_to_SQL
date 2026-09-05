@@ -53,12 +53,29 @@ export JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))
 There is no default for `JWT_SECRET` and the API refuses to start without
 it.
 
+### Signing up
+
+Sign up or sign in with an email address **or** a phone number. Accounts created
+with a phone have no email at all, and vice versa — `app.users` requires
+at least one of the two, not both.
+
 Sign up from the app's own screen, or create accounts from the command
 line:
 
 ```bash
 cd api && ../.venv/bin/python -m app.auth.cli create-user you@example.com --role operator
+cd api && ../.venv/bin/python -m app.auth.cli create-user "+91 98765 43210"
 ```
+
+Phone numbers are normalised to E.164 before any lookup, so
+`+91 98765 43210`, `+91-98765-43210` and `09876543210` all reach the same
+account. A leading zero on a bare national number is treated as the trunk
+prefix and dropped.
+
+One honest limit: signing up doesn't verify the address or number you
+typed — there's no confirmation step, so you could register someone
+else's. Closing that needs an email/SMS provider, which this project
+deliberately doesn't ship.
 
 The first account on a fresh instance becomes an operator, since somebody
 has to be able to read the audit log. Everyone after that signs up as a
@@ -124,10 +141,10 @@ $PSQL "SET app.tenant_id='1'; SELECT count(*) FROM analytics.v_orders"
 cd api && ../.venv/bin/python -m pytest
 ```
 
-271 tests. Guard and schema tests need neither a database nor a model.
+313 tests. Guard and schema tests need neither a database nor a model.
 Integration tests skip when Postgres or Ollama isn't reachable.
-`tests/test_auth.py` and `tests/test_history.py` cover the auth
-boundaries, including that a `tenant_id` in a request body is ignored.
+`test_auth.py` and `test_history.py` cover the auth boundaries, including
+that a `tenant_id` in a request body is ignored.
 
 ## Evaluation
 
@@ -159,10 +176,10 @@ and makes the SQL editable.
 ## Layout
 
 ```
-db/            schema, seed, roles, audit table, users + history
+db/            schema, seed, roles, audit table, users, history
 semantic/      business glossary and canonical metric SQL (hand-maintained)
 api/app/
-  auth/        password hashing, tokens, route dependencies
+  auth/        identifiers, password hashing, tokens, route dependencies
   history/     conversation + message persistence
   guards/      the AST guard
   schema/      catalog introspection, DDL rendering, value index

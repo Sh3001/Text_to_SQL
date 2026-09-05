@@ -1,5 +1,8 @@
 """Sign-up, sign-in, and account routes.
 
+An account is identified by an email address OR a phone number — see
+identifiers.py for why normalising the latter matters.
+
 Sign-up is open by default (set ALLOW_SIGNUP=false to close it), but it
 is deliberately not a way to choose who you are. A self-served account
 always lands as a `member` in DEFAULT_SIGNUP_TENANT_ID. Role and tenant
@@ -16,9 +19,9 @@ from __future__ import annotations
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 
-from . import store
+from . import identifiers, store
 from .deps import Principal, current_principal, require_operator
 from .security import issue_token
 
@@ -36,16 +39,20 @@ def default_signup_tenant() -> int:
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    identifier: str = Field(description="The email address or phone number on the account.")
     password: str
 
 
 class SignupRequest(BaseModel):
-    """Note what is absent: no role, no tenant_id. Both are decided by
-    the server. Adding either field here is a security regression, and
-    test_auth.py asserts they stay absent."""
+    """`identifier` is an email address or a phone number — an account
+    can be created with either.
 
-    email: EmailStr
+    Note what is absent: no role, no tenant_id. Both are decided by the
+    server. Adding either field here is a security regression, and
+    test_auth.py asserts they stay absent.
+    """
+
+    identifier: str = Field(description="An email address or a phone number.")
     password: str = Field(min_length=MIN_PASSWORD_LENGTH)
     display_name: str | None = None
 
@@ -54,18 +61,29 @@ class CreateUserRequest(BaseModel):
     """What an operator may set when adding a teammate. Still no tenant —
     an operator can only add people to their own."""
 
-    email: EmailStr
+    identifier: str = Field(description="An email address or a phone number.")
     password: str = Field(min_length=MIN_PASSWORD_LENGTH)
     display_name: str | None = None
     role: str = Field(default="member", pattern="^(member|operator)$")
 
 
+def _split_identifier(raw: str) -> tuple[str | None, str | None]:
+    """Turns one identifier into the (email, phone) pair the store wants.
+    Raises a 400 on junk — at signup that's the user's typo and worth
+    saying precisely, since it reveals nothing about existing accounts."""
+    try:
+        return identifiers.split(raw)
+    except identifiers.IdentifierError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 class UserResponse(BaseModel):
     id: int
-    email: str
+    email: str | None
     display_name: str | None
     tenant_id: int
     role: str
+    phone: str | None = None
 
 
 class TokenResponse(BaseModel):
@@ -78,7 +96,7 @@ class TokenResponse(BaseModel):
 def _to_response(user: store.User) -> UserResponse:
     return UserResponse(
         id=user.id, email=user.email, display_name=user.display_name,
-        tenant_id=user.tenant_id, role=user.role,
+        tenant_id=user.tenant_id, role=user.role, phone=user.phone,
     )
 
 
@@ -109,9 +127,11 @@ async def signup(req: SignupRequest) -> TokenResponse:
             detail="sign-up is closed on this instance — ask an operator for an account",
         )
 
+    email, phone = _split_identifier(req.identifier)
     try:
         user = store.create_user(
-            email=req.email,
+            email=email,
+            phone=phone,
             password=req.password,
             # Server-decided, both of them.
             tenant_id=default_signup_tenant(),
@@ -123,19 +143,21 @@ async def signup(req: SignupRequest) -> TokenResponse:
         # sign-up into an account-existence oracle.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="that email can't be used — try signing in instead",
+            detail="that email or phone number can't be used — try signing in instead",
         ) from None
     return _token_response(user)
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(req: LoginRequest) -> TokenResponse:
-    user = store.authenticate(req.email, req.password)
+    user = store.authenticate(req.identifier, req.password)
     if user is None:
-        # One message for both wrong-email and wrong-password, matching
-        # store.authenticate()'s constant-time behaviour.
+        # One message for a wrong identifier, a wrong password, and a
+        # malformed identifier alike — matching store.authenticate()'s
+        # constant-time behaviour.
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="incorrect email or password"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="incorrect email/phone or password",
         )
     return _token_response(user)
 
@@ -154,9 +176,11 @@ async def create_user(
 ) -> UserResponse:
     """Operators add teammates. New accounts land in the operator's own
     tenant — an operator cannot mint a user into somebody else's data."""
+    email, phone = _split_identifier(req.identifier)
     try:
         user = store.create_user(
-            email=req.email, password=req.password, tenant_id=principal.tenant_id,
+            email=email, phone=phone, password=req.password,
+            tenant_id=principal.tenant_id,
             role=req.role, display_name=req.display_name,
         )
     except store.DuplicateEmailError as exc:

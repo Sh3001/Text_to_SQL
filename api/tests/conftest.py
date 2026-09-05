@@ -125,6 +125,9 @@ def _clean_up_test_accounts():
         with psycopg.connect(TEST_DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM app.users WHERE email LIKE %s", ("%@querywarden.example.com",))
+                # Phone-only accounts from the signup tests use the
+                # reserved +1555 range.
+                cur.execute("DELETE FROM app.users WHERE phone LIKE %s", ("+1555%",))
             conn.commit()
     except Exception:  # noqa: BLE001 — cleanup must never fail a green run
         pass

@@ -12,11 +12,17 @@ import psycopg
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api.routes import router
-from .auth.routes import router as auth_router
-from .auth.security import jwt_secret
-from .history.routes import router as history_router
-from .pipeline.generate import build_context
+# Before anything reads os.environ — DATABASE_URL and the settings
+# below are resolved at import time.
+from .config import load_env
+
+load_env()
+
+from .api.routes import router  # noqa: E402
+from .auth.routes import router as auth_router  # noqa: E402
+from .auth.security import jwt_secret  # noqa: E402
+from .history.routes import router as history_router  # noqa: E402
+from .pipeline.generate import build_context  # noqa: E402
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/querywarden")
 

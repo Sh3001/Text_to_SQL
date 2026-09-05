@@ -15,6 +15,12 @@ function relativeTime(iso: string): string {
   return days < 7 ? `${days}d ago` : new Date(then).toLocaleDateString();
 }
 
+/** An account created from a phone number has no email at all, so
+ *  every display path needs a fallback chain. */
+function userLabel(user: User): string {
+  return user.display_name || user.email || user.phone || `User ${user.id}`;
+}
+
 export function Sidebar({
   conversations,
   activeId,
@@ -107,10 +113,10 @@ export function Sidebar({
       <div className="sidebar-user">
         <div className="user-line">
           <span className="user-avatar" aria-hidden="true">
-            {(user.display_name || user.email).charAt(0).toUpperCase()}
+            {userLabel(user).replace(/^\+/, "").charAt(0).toUpperCase()}
           </span>
           <span className="user-text">
-            <span className="user-name">{user.display_name || user.email}</span>
+            <span className="user-name">{userLabel(user)}</span>
             <span className="user-role">
               {user.role === "operator" ? "Operator" : "Member"} · tenant {user.tenant_id}
             </span>
