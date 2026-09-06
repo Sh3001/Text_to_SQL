@@ -27,6 +27,12 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
+from app.config import load_env  # noqa: E402
+
+# Same reason as the CLI: without this the harness would measure whatever
+# provider the shell happened to have set, not the one in api/.env.
+load_env()
+
 from app.guards import ast_guard  # noqa: E402
 from app.pipeline.answer import answer  # noqa: E402
 from app.pipeline.errors import Action  # noqa: E402
@@ -191,7 +197,27 @@ def print_report(golden: list[GoldenCaseResult], ambiguity: list[AmbiguityCaseRe
         avg_latency = sum(r.latency_ms for r in golden) / n_all
         p95_latency = sorted(r.latency_ms for r in golden)[int(0.95 * n_all) - 1]
         print(f"\n  avg latency: {avg_latency:.0f}ms   p95 latency: {p95_latency:.0f}ms")
-        print("  cost: $0.00 (local Ollama model — no per-token billing)")
+        from app.llm import client  # noqa: PLC0415 — provider is runtime config
+
+        if client.provider() == "ollama":
+            print("  cost: $0.00 (local Ollama model — no per-token billing)")
+        else:
+            print(f"  provider: {client.provider()} ({client.default_model_for()}) — billed per token")
+
+        # A hosted provider turns quota into a failure mode the local model
+        # doesn't have, and a run that hit it is measuring the quota, not
+        # the model. Say so loudly rather than letting the accuracy line be
+        # read as a quality number.
+        unavailable = [
+            r for r in golden
+            if not r.valid_sql and ("quota" in r.detail.lower() or "503" in r.detail or "high demand" in r.detail.lower())
+        ]
+        if unavailable:
+            print(
+                f"\n  ⚠ {len(unavailable)}/{n_all} case(s) never reached the model "
+                "(quota or capacity, not a wrong answer)."
+            )
+            print("    The accuracy above is NOT a quality measurement for this run.")
 
         failures = [r for r in golden if r.correct is False or (not r.valid_sql and r.verdict not in ("ask",))]
         if failures:

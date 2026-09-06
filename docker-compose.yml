@@ -21,6 +21,7 @@ services:
       - ./db/04_app.sql:/docker-entrypoint-initdb.d/04_app.sql:ro
       - ./db/05_phone_identity.sql:/docker-entrypoint-initdb.d/05_phone_identity.sql:ro
       - ./db/06_password_reset.sql:/docker-entrypoint-initdb.d/06_password_reset.sql:ro
+      - ./db/07_remove_auth.sql:/docker-entrypoint-initdb.d/07_remove_auth.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d querywarden"]
       interval: 5s

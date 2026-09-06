@@ -115,23 +115,6 @@ export type AuditEvent = {
   message: string;
 };
 
-// ---- auth ----
-
-export type User = {
-  id: number;
-  email: string | null;
-  phone?: string | null;
-  display_name: string | null;
-  tenant_id: number;
-  role: "member" | "operator";
-};
-
-export type TokenResponse = {
-  access_token: string;
-  token_type: string;
-  expires_in: number;
-  user: User;
-};
 
 // ---- history ----
 
@@ -151,9 +134,4 @@ export type StoredMessage = {
   created_at: string;
 };
 
-export type AuthConfig = {
-  setup_required: boolean;
-  signup_enabled: boolean;
-  min_password_length: number;
-};
 

@@ -8,12 +8,10 @@ import {
   fetchConversations,
   rejectPlan,
 } from "./api";
-import { clearSession, fetchMe, getStoredUser } from "./auth";
 import { Activity } from "./components/Activity";
 import { QueryCard } from "./components/QueryCard";
-import { SignIn } from "./components/SignIn";
 import { Sidebar } from "./components/Sidebar";
-import type { Conversation, Turn, User } from "./types";
+import type { Conversation, Turn } from "./types";
 import "./App.css";
 
 const SUGGESTIONS = [
@@ -62,9 +60,6 @@ function newTurn(id: string, question: string): Turn {
 let turnCounter = 0;
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(getStoredUser());
-  const [checkingSession, setCheckingSession] = useState(true);
-
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
@@ -75,26 +70,6 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // Confirm the stored token is still good before trusting the cached user.
-  useEffect(() => {
-    fetchMe()
-      .then((me) => setUser(me))
-      .catch(() => setUser(null))
-      .finally(() => setCheckingSession(false));
-  }, []);
-
-  // api.ts fires this when any request comes back 401 mid-session.
-  useEffect(() => {
-    const onSignedOut = () => {
-      setUser(null);
-      setTurns([]);
-      setConversations([]);
-      setActiveId(null);
-    };
-    window.addEventListener("qw:signed-out", onSignedOut);
-    return () => window.removeEventListener("qw:signed-out", onSignedOut);
-  }, []);
-
   const refreshConversations = useCallback(async () => {
     try {
       setConversations(await fetchConversations());
@@ -104,8 +79,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (user) void refreshConversations();
-  }, [user, refreshConversations]);
+    void refreshConversations();
+  }, [refreshConversations]);
 
   function patchTurn(id: string, patch: Partial<Turn>) {
     setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
@@ -223,14 +198,6 @@ export default function App() {
     }
   }
 
-  function handleSignOut() {
-    clearSession();
-    setUser(null);
-    setTurns([]);
-    setConversations([]);
-    setActiveId(null);
-  }
-
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const q = input.trim();
@@ -239,29 +206,15 @@ export default function App() {
     void handleAsk(q);
   }
 
-  if (checkingSession) {
-    return (
-      <div className="signin-screen">
-        <div className="signin-card">
-          <p className="signin-checking">Checking your session…</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!user) return <SignIn onSignedIn={setUser} />;
-
   return (
     <div className={`shell ${collapsed ? "shell-collapsed" : ""}`}>
       <Sidebar
         conversations={conversations}
         activeId={activeId}
-        user={user}
         collapsed={collapsed}
         onSelect={(id) => void handleSelectConversation(id)}
         onNew={handleNewConversation}
         onDelete={(id) => void handleDeleteConversation(id)}
-        onSignOut={handleSignOut}
         onToggle={() => setCollapsed((v) => !v)}
       />
 
@@ -276,21 +229,19 @@ export default function App() {
               <button className={view === "chat" ? "active" : ""} onClick={() => setView("chat")}>
                 Chat
               </button>
-              {user.role === "operator" && (
-                <button
-                  className={view === "activity" ? "active" : ""}
-                  onClick={() => setView("activity")}
-                >
-                  Activity
-                </button>
-              )}
+              <button
+                className={view === "activity" ? "active" : ""}
+                onClick={() => setView("activity")}
+              >
+                Activity
+              </button>
             </nav>
           </div>
         </header>
 
         {loadError && <p className="banner-error">{loadError}</p>}
 
-        {view === "activity" && user.role === "operator" ? (
+        {view === "activity" ? (
           <Activity />
         ) : (
           <>

@@ -54,84 +54,80 @@ def _ollama_reachable() -> bool:
 requires_ollama = pytest.mark.skipif(not _ollama_reachable(), reason="Ollama server not reachable")
 
 
-# ---------------------------------------------------------------------------
-# Authentication fixtures
-# ---------------------------------------------------------------------------
-# Routes require a bearer token since auth landed (api/app/auth/). Tests
-# get real tokens from real rows in app.users rather than a stubbed
-# dependency override — the tenant-isolation properties these fixtures
-# exist to prove are exactly what a stub would paper over.
-
-# The app refuses to start without this; tests don't need a real secret,
-# they need a consistent one. Set before app.main is imported anywhere.
-os.environ.setdefault("JWT_SECRET", "test-only-secret-not-for-any-deployment")
-
-TEST_OPERATOR_EMAIL = "pytest-operator@querywarden.example.com"
-TEST_MEMBER_EMAIL = "pytest-member@querywarden.example.com"
-TEST_PASSWORD = "pytest-password-123"
-
-
-def _ensure_user(email: str, role: str, tenant_id: int = 1):
-    """Get-or-create, so a re-run doesn't collide with the previous one."""
-    from app.auth import store
-
-    with psycopg.connect(TEST_DATABASE_URL) as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM app.users WHERE email = %s", (email,))
-        conn.commit()
-    return store.create_user(
-        email=email, password=TEST_PASSWORD, tenant_id=tenant_id,
-        role=role, database_url=TEST_DATABASE_URL,
-    )
-
-
-@pytest.fixture()
-def operator_user():
-    return _ensure_user(TEST_OPERATOR_EMAIL, "operator")
-
-
-@pytest.fixture()
-def member_user():
-    return _ensure_user(TEST_MEMBER_EMAIL, "member")
-
-
-def auth_headers_for(user) -> dict[str, str]:
-    """Tokens must carry the password_changed_at pin, or auth/deps.py
-    refuses them — it fails closed on an unpinned token by design."""
-    from app.auth.security import issue_token
-
-    token, _ = issue_token(
-        user.id, user.tenant_id, user.role, user.email, user.password_changed_at
-    )
-    return {"Authorization": f"Bearer {token}"}
-
-
-@pytest.fixture()
-def operator_headers(operator_user):
-    return auth_headers_for(operator_user)
-
-
-@pytest.fixture()
-def member_headers(member_user):
-    return auth_headers_for(member_user)
-
 
 @pytest.fixture(scope="session", autouse=True)
-def _clean_up_test_accounts():
-    """Sign-up tests mint unique emails so repeated runs don't collide,
-    which would otherwise leave them piling up in app.users. Everything
-    on the reserved example.com test domain goes at the end of a session;
-    conversations cascade with their owner."""
-    yield
+def _preserve_the_audit_log():
+    """Save audit.query_log for the duration of the session and put it back.
+
+    Several tests TRUNCATE this table so their row-count assertions
+    ("total_queries == 1") aren't sensitive to execution order. That is
+    reasonable in isolation, but the table is the running app's real
+    activity trail — before this fixture, running the suite silently
+    emptied the Activity tab of everything that had ever happened.
+
+    Rows come back without their original `id` (the truncate restarts the
+    sequence); nothing reads that column, and `request_id` — the identifier
+    that actually means something — is preserved.
+    """
     if not _db_reachable():
+        yield
         return
+
+    columns = (
+        "request_id, occurred_at, tenant_id, question, model, verdict, failure_kind, "
+        "generated_sql, safe_sql, edited, repair_attempts, row_count, duration_ms, message"
+    )
+    with psycopg.connect(TEST_DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT {columns} FROM audit.query_log ORDER BY id")
+            saved = cur.fetchall()
+
+    yield
+
+    if not saved:
+        return
+    placeholders = ", ".join(["%s"] * len(saved[0]))
     try:
         with psycopg.connect(TEST_DATABASE_URL) as conn:
             with conn.cursor() as cur:
-                cur.execute("DELETE FROM app.users WHERE email LIKE %s", ("%@querywarden.example.com",))
-                # Phone-only accounts from the signup tests use the
-                # reserved +1555 range.
-                cur.execute("DELETE FROM app.users WHERE phone LIKE %s", ("+1555%",))
+                cur.executemany(
+                    f"INSERT INTO audit.query_log ({columns}) VALUES ({placeholders})", saved
+                )
+            conn.commit()
+    except Exception:  # noqa: BLE001 — restoring must never fail a green run
+        pass
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _clean_up_test_rows():
+    """Delete every conversation the test session created.
+
+    Scoped by creation time, not by title. An earlier version deleted a
+    hardcoded list of titles, which silently missed every conversation
+    that `append_turn` had renamed after its first question — so running
+    the suite left a growing pile of "shared thread" and "How many orders
+    were shipped?" rows in the sidebar of the real app. A fixed list can
+    never cover what the code under test actually produces.
+
+    Messages cascade with their conversation.
+    """
+    if not _db_reachable():
+        yield
+        return
+
+    with psycopg.connect(TEST_DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT now()")
+            started_at = cur.fetchone()[0]
+
+    yield
+
+    try:
+        with psycopg.connect(TEST_DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM app.conversations WHERE created_at >= %s", (started_at,)
+                )
             conn.commit()
     except Exception:  # noqa: BLE001 — cleanup must never fail a green run
         pass

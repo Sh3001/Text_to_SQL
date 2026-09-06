@@ -1,8 +1,9 @@
 """Conversation and message persistence over the trusted connection.
 
-Every read is scoped by user_id AND tenant_id, not just the conversation
-id. A conversation id is a uuid, not a secret, and treating it as one is
-how you end up with an object-reference vulnerability.
+There are no accounts, so a thread belongs to a tenant rather than to a
+person and every thread is visible to anyone who can reach the instance.
+Reads are still scoped by tenant_id — that is what keeps one tenant's
+history out of another's, and it is the only boundary left here.
 
 Assistant turns store the whole serialized outcome as jsonb. Reloading a
 thread replays exactly what the user saw rather than re-running the SQL,
@@ -51,17 +52,17 @@ def _title_from(question: str) -> str:
 
 
 def create_conversation(
-    user_id: int, tenant_id: int, title: str | None = None, database_url: str | None = None
+    tenant_id: int, title: str | None = None, database_url: str | None = None
 ) -> Conversation:
     with psycopg.connect(database_url or app_database_url()) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO app.conversations (user_id, tenant_id, title)
-                VALUES (%s, %s, COALESCE(%s, 'New conversation'))
+                INSERT INTO app.conversations (tenant_id, title)
+                VALUES (%s, COALESCE(%s, 'New conversation'))
                 RETURNING id::text, title, created_at, updated_at
                 """,
-                (user_id, tenant_id, title),
+                (tenant_id, title),
             )
             row = cur.fetchone()
         conn.commit()
@@ -69,7 +70,7 @@ def create_conversation(
 
 
 def list_conversations(
-    user_id: int, tenant_id: int, limit: int = 100, database_url: str | None = None
+    tenant_id: int, limit: int = 100, database_url: str | None = None
 ) -> list[Conversation]:
     with psycopg.connect(database_url or app_database_url()) as conn:
         with conn.cursor() as cur:
@@ -79,12 +80,12 @@ def list_conversations(
                        count(m.id) AS message_count
                 FROM app.conversations c
                 LEFT JOIN app.messages m ON m.conversation_id = c.id
-                WHERE c.user_id = %s AND c.tenant_id = %s
+                WHERE c.tenant_id = %s
                 GROUP BY c.id
                 ORDER BY c.updated_at DESC
                 LIMIT %s
                 """,
-                (user_id, tenant_id, limit),
+                (tenant_id, limit),
             )
             return [
                 Conversation(id=r[0], title=r[1], created_at=str(r[2]), updated_at=str(r[3]), message_count=r[4])
@@ -92,23 +93,23 @@ def list_conversations(
             ]
 
 
-def _owns(cur, conversation_id: str, user_id: int, tenant_id: int) -> bool:
+def _in_tenant(cur, conversation_id: str, tenant_id: int) -> bool:
     cur.execute(
-        "SELECT 1 FROM app.conversations WHERE id = %s AND user_id = %s AND tenant_id = %s",
-        (conversation_id, user_id, tenant_id),
+        "SELECT 1 FROM app.conversations WHERE id = %s AND tenant_id = %s",
+        (conversation_id, tenant_id),
     )
     return cur.fetchone() is not None
 
 
 def get_messages(
-    conversation_id: str, user_id: int, tenant_id: int, database_url: str | None = None
+    conversation_id: str, tenant_id: int, database_url: str | None = None
 ) -> list[Message] | None:
-    """None means the conversation doesn't exist *or* isn't this user's —
-    deliberately the same answer, so the route returns 404 either way and
-    doesn't confirm that someone else's conversation id is real."""
+    """None means the conversation doesn't exist *or* belongs to another
+    tenant — deliberately the same answer, so the route returns 404 either
+    way and doesn't confirm that another tenant's id is real."""
     with psycopg.connect(database_url or app_database_url()) as conn:
         with conn.cursor() as cur:
-            if not _owns(cur, conversation_id, user_id, tenant_id):
+            if not _in_tenant(cur, conversation_id, tenant_id):
                 return None
             cur.execute(
                 """
@@ -125,7 +126,6 @@ def get_messages(
 
 def append_turn(
     conversation_id: str,
-    user_id: int,
     tenant_id: int,
     question: str,
     outcome: dict[str, Any] | None,
@@ -133,10 +133,10 @@ def append_turn(
 ) -> bool:
     """Writes the user's question and the assistant's outcome as one unit,
     and retitles a still-untitled conversation from its first question.
-    Returns False if the conversation isn't this user's."""
+    Returns False if the conversation isn't in this tenant."""
     with psycopg.connect(database_url or app_database_url()) as conn:
         with conn.cursor() as cur:
-            if not _owns(cur, conversation_id, user_id, tenant_id):
+            if not _in_tenant(cur, conversation_id, tenant_id):
                 return False
 
             cur.execute(
@@ -168,13 +168,13 @@ def append_turn(
 
 
 def delete_conversation(
-    conversation_id: str, user_id: int, tenant_id: int, database_url: str | None = None
+    conversation_id: str, tenant_id: int, database_url: str | None = None
 ) -> bool:
     with psycopg.connect(database_url or app_database_url()) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM app.conversations WHERE id = %s AND user_id = %s AND tenant_id = %s",
-                (conversation_id, user_id, tenant_id),
+                "DELETE FROM app.conversations WHERE id = %s AND tenant_id = %s",
+                (conversation_id, tenant_id),
             )
             deleted = cur.rowcount > 0
         conn.commit()
@@ -182,16 +182,16 @@ def delete_conversation(
 
 
 def rename_conversation(
-    conversation_id: str, user_id: int, tenant_id: int, title: str, database_url: str | None = None
+    conversation_id: str, tenant_id: int, title: str, database_url: str | None = None
 ) -> bool:
     with psycopg.connect(database_url or app_database_url()) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE app.conversations SET title = %s, updated_at = now()
-                WHERE id = %s AND user_id = %s AND tenant_id = %s
+                WHERE id = %s AND tenant_id = %s
                 """,
-                (_title_from(title), conversation_id, user_id, tenant_id),
+                (_title_from(title), conversation_id, tenant_id),
             )
             renamed = cur.rowcount > 0
         conn.commit()

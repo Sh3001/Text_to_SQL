@@ -11,6 +11,13 @@ import os
 
 import psycopg
 
+from ..config import load_env
+
+# Every entry point loads .env for itself. Without this the CLI silently
+# ignores LLM_PROVIDER and DATABASE_URL from api/.env and falls back to
+# the ambient environment, which looks like it worked and isn't.
+load_env()
+
 from .answer import AnswerOutcome, answer
 from .errors import Action
 from .generate import build_context

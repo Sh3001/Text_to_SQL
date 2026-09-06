@@ -1,27 +1,13 @@
-import { authHeaders, clearSession } from "./auth";
 import { streamSSE } from "./sse";
 import type { AuditEvent, Conversation, StatsSummary, StoredMessage } from "./types";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8001";
 
-/** A 401 anywhere means the token expired mid-session. Clear it and let
- *  App's auth gate show the sign-in screen rather than leaving the user
- *  clicking a UI whose every request will fail. */
-async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
+async function json<T>(path: string, init: RequestInit = {}): Promise<T> {
   const resp = await fetch(`${API_URL}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...authHeaders(), ...(init.headers ?? {}) },
+    headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
   });
-  if (resp.status === 401) {
-    clearSession();
-    window.dispatchEvent(new CustomEvent("qw:signed-out"));
-    throw new Error("Your session expired. Please sign in again.");
-  }
-  return resp;
-}
-
-async function json<T>(path: string, init?: RequestInit): Promise<T> {
-  const resp = await authedFetch(path, init);
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
     let detail = `${resp.status} ${resp.statusText}`;
@@ -39,25 +25,15 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
 // ---- asking questions ----
 
 export function askQuestion(question: string, conversationId: string | null) {
-  return streamSSE(
-    `${API_URL}/api/query`,
-    { question, conversation_id: conversationId },
-    undefined,
-    authHeaders()
-  );
+  return streamSSE(`${API_URL}/api/query`, { question, conversation_id: conversationId });
 }
 
 export function approvePlan(planId: string, sql: string | undefined) {
-  return streamSSE(
-    `${API_URL}/api/query/approve`,
-    { plan_id: planId, sql },
-    undefined,
-    authHeaders()
-  );
+  return streamSSE(`${API_URL}/api/query/approve`, { plan_id: planId, sql });
 }
 
 export async function rejectPlan(planId: string): Promise<void> {
-  await authedFetch(`/api/query/${planId}/reject`, { method: "POST" });
+  await fetch(`${API_URL}/api/query/${planId}/reject`, { method: "POST" });
 }
 
 export async function checkHealth(): Promise<{ status: string; schema_fingerprint: string }> {
@@ -91,7 +67,7 @@ export async function renameConversation(id: string, title: string): Promise<voi
   await json(`/api/conversations/${id}`, { method: "PATCH", body: JSON.stringify({ title }) });
 }
 
-// ---- observability (operator only) ----
+// ---- observability ----
 
 export function fetchStats(hours = 24): Promise<StatsSummary> {
   return json<StatsSummary>(`/api/stats?hours=${hours}`);

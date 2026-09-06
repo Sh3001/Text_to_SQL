@@ -24,7 +24,6 @@ from app.llm.schemas import SqlPlan
 from app.pipeline import answer as answer_module
 
 from .conftest import TEST_DATABASE_URL, requires_db  # noqa: F401
-from .conftest import operator_headers, operator_user  # noqa: F401
 
 
 def _gen_result(sql: str, confidence: str = "high") -> _GenerationResult:
@@ -63,7 +62,7 @@ def _iter_sse_events(text: str):
 
 
 @pytest.fixture()
-def client(operator_headers):
+def client():
     # app.main reads DATABASE_URL at import time and TEST_DATABASE_URL
     # (conftest.py) is the same default — no env patching needed as long
     # as that stays true; asserted here so a future drift fails loudly
@@ -72,11 +71,7 @@ def client(operator_headers):
 
     assert DATABASE_URL == TEST_DATABASE_URL, "app.main's DB default drifted from the test default"
 
-    # Every route below auth requires a bearer token. Attaching it to the
-    # client keeps the existing tests about what they were about; the
-    # unauthenticated and wrong-role paths get their own tests in
-    # test_auth.py rather than being smuggled in here.
-    with TestClient(app, headers=operator_headers) as c:
+    with TestClient(app) as c:
         yield c
 
 
@@ -269,3 +264,38 @@ def test_edited_and_approved_query_is_logged_as_edited(client, monkeypatch):
         row = cur.fetchone()
     assert row[0] is True
     assert "v_customers" in row[1]
+
+
+# ---------------------------------------------------------------------------
+# The tenant boundary, with no authentication to enforce it
+# ---------------------------------------------------------------------------
+
+@requires_db
+def test_the_tenant_is_not_a_request_field(client, monkeypatch):
+    """There is no login any more, but the tenant still must not come from
+    the caller. It used to: posting {"tenant_id": 2} read another tenant's
+    rows, because the view predicates faithfully enforced whatever number
+    arrived. Unauthenticated and caller-controlled are different things,
+    and this is what keeps the second one closed."""
+    from app.pipeline import answer as answer_module
+    from app.tenant import current_tenant_id
+
+    seen: dict[str, int] = {}
+
+    def fake_plan(ctx, question, tenant_id=1, model=None, on_event=None):
+        seen["tenant_id"] = tenant_id
+        raise RuntimeError("stop here — the tenant is all this test needs")
+
+    monkeypatch.setattr(answer_module, "plan", fake_plan)
+    client.post("/api/query", json={"question": "how many orders", "tenant_id": 999})
+
+    assert seen["tenant_id"] == current_tenant_id()
+    assert seen["tenant_id"] != 999
+
+
+@requires_db
+def test_request_models_carry_no_tenant_field():
+    from app.api.routes import ApproveRequest, QueryRequest
+
+    assert "tenant_id" not in QueryRequest.model_fields
+    assert "tenant_id" not in ApproveRequest.model_fields

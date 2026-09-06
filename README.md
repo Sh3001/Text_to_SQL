@@ -36,85 +36,45 @@ Four controls, each independent of the others:
 
 Multi-tenant filtering lives in the view definitions and reads
 `current_setting('app.tenant_id')`. When it isn't set, the views return
-zero rows rather than everything. That value comes from a signed claim in
-the caller's token, which came from `app.users` at login — never from a
-request field.
+zero rows rather than everything.
 
-## Accounts
+**There is no authentication.** Every route is open, and conversation
+history is a single shared workspace. The tenant is still not something a
+caller can choose: it comes from `DEFAULT_TENANT_ID` in the server's own
+configuration (`api/app/tenant.py`), never from the request body. It used
+to arrive in the body, which meant those view predicates were faithfully
+enforcing a number the caller picked. Unauthenticated and
+caller-controlled are different things, and only the second one was a
+hole. Serving more than one tenant means knowing who is asking, which
+means authentication again.
 
-Every route except `/api/health` requires a bearer token. Two roles:
-`member` asks questions, `operator` can also read the audit log and the
-stats dashboard, and create accounts.
+## Language model
 
-```bash
-export JWT_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(48))")
-```
+Two backends, selected by `LLM_PROVIDER` in `api/.env`. Everything
+downstream imports from `api/app/llm/client.py` and nothing else, so
+swapping providers touches that file and no other part of the pipeline.
 
-There is no default for `JWT_SECRET` and the API refuses to start without
-it.
-
-### Signing up
-
-Sign up or sign in with an email address **or** a phone number. Accounts created
-with a phone have no email at all, and vice versa — `app.users` requires
-at least one of the two, not both.
-
-Sign up from the app's own screen, or create accounts from the command
-line:
+| | `ollama` (default) | `gemini` |
+|---|---|---|
+| Model | `qwen2.5-coder:3b`, local | `gemini-3.6-flash`, hosted |
+| Needs | `ollama serve` | `GEMINI_API_KEY` |
+| Cost | none | per token |
 
 ```bash
-cd api && ../.venv/bin/python -m app.auth.cli create-user you@example.com --role operator
-cd api && ../.venv/bin/python -m app.auth.cli create-user "+91 98765 43210"
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=...        # https://aistudio.google.com/apikey
+GEMINI_MODEL=gemini-3.6-flash
 ```
 
-Phone numbers are normalised to E.164 before any lookup, so
-`+91 98765 43210`, `+91-98765-43210` and `09876543210` all reach the same
-account. A leading zero on a bare national number is treated as the trunk
-prefix and dropped.
+Both use schema-constrained decoding, so the structural guarantee holds
+either way: the model cannot return a shape that isn't a `SqlPlan`.
+Ollama takes the pydantic schema directly; Gemini's `responseSchema` is a
+restricted OpenAPI subset that rejects `$defs`, `$ref` and `title`, all of
+which pydantic emits, so `api/app/llm/gemini.py` translates the schema on
+the way out. That translation is the fragile part and has the most tests.
 
-### Forgotten passwords
-
-`Forgot your password?` on the sign-in screen prepares a reset. With no
-mail or SMS provider wired up, an operator hands the link over:
-
-```bash
-cd api && ../.venv/bin/python -m app.auth.cli reset-password them@example.com
-```
-
-That prints a single-use link valid for an hour. Following it opens the
-reset screen with the token filled in. Requesting a reset over HTTP always
-answers the same way whether or not the account exists, so the route can't
-be used to find out who has one; the CLI does say, because an operator
-already knows.
-
-Signed-in users can change their own password with `POST
-/api/auth/password/change`, which requires the current one.
-
-Both paths stamp `app.users.password_changed_at`, and every session token
-pins that value — so a reset or a change signs out **every other session
-immediately** rather than leaving a stolen one alive for the token's
-remaining 12 hours. That costs one small query per authenticated request,
-which is the strongest argument for adding the connection pool named
-below.
-
-One honest limit: signing up doesn't verify the address or number you
-typed — there's no confirmation step, so you could register someone
-else's. Closing that needs an email/SMS provider, which this project
-deliberately doesn't ship.
-
-The first account on a fresh instance becomes an operator, since somebody
-has to be able to read the audit log. Everyone after that signs up as a
-`member` in `DEFAULT_SIGNUP_TENANT_ID` (default 1). Role and tenant are
-decided server-side and are not fields on the sign-up request, so
-`/api/auth/signup` can't be used to escalate or to land in someone else's
-tenant. Set `ALLOW_SIGNUP=false` to close sign-up and have operators
-create accounts instead.
-
-Conversations and their answers are stored in `app.conversations` and
-`app.messages`. Reloading a thread replays the stored outcome rather than
-re-running the SQL, so old answers don't silently change as the warehouse
-does. `chatbot_ro` has no grants on the `app` schema at all, the same
-posture as `audit`.
+Google retires model names — a 404 from the API means `GEMINI_MODEL`
+needs updating, and the error says so.
 
 ## Quickstart
 
@@ -135,8 +95,7 @@ compose. It drops and recreates the `querywarden` database.
 
 ```bash
 # terminal 1
-cd api && JWT_SECRET="$JWT_SECRET" \
-  DATABASE_URL=postgresql://postgres:postgres@localhost:5432/querywarden \
+cd api && DATABASE_URL=postgresql://postgres:postgres@localhost:5432/querywarden \
   ../.venv/bin/python -m uvicorn app.main:app --port 8001
 
 # terminal 2
@@ -155,7 +114,7 @@ PSQL="psql -U chatbot_ro -h localhost -d querywarden -c"
 $PSQL "DELETE FROM analytics.orders"                  # read-only transaction
 $PSQL "SELECT * FROM analytics.legacy_orders_flat"    # permission denied
 $PSQL "SELECT * FROM audit.query_log"                 # permission denied
-$PSQL "SELECT * FROM app.users"                       # permission denied
+$PSQL "SELECT * FROM app.conversations"               # permission denied
 $PSQL "SELECT count(*) FROM analytics.v_customers"    # 0, no tenant set
 $PSQL "SET app.tenant_id='1'; SELECT count(*) FROM analytics.v_orders"
 ```
@@ -166,11 +125,10 @@ $PSQL "SET app.tenant_id='1'; SELECT count(*) FROM analytics.v_orders"
 cd api && ../.venv/bin/python -m pytest
 ```
 
-335 tests. Guard and schema tests need neither a database nor a model.
+288 tests. Guard and schema tests need neither a database nor a model.
 Integration tests skip when Postgres or Ollama isn't reachable.
-`test_auth.py`, `test_password_reset.py` and `test_history.py` cover the
-auth boundaries — that a `tenant_id` in a request body is ignored, and
-that a reset kills sessions issued in the same second it happens.
+`test_api.py` asserts the tenant can't be set from a request body, and
+`test_history.py` covers tenant scoping on conversations.
 
 ## Evaluation
 
@@ -189,8 +147,9 @@ cd eval && PYTHONPATH=../api ../.venv/bin/python run_eval.py
 | Hard (12)   | 25%      | 58%       |
 | Overall     | 69%      | 90%       |
 
-Average latency 10.5s, p95 35.7s. Adversarial suite: 61/61 blocked, which
-gates the build. Ambiguity set: 7% clarification recall at a 0%
+Those numbers are the local `qwen2.5-coder:3b`. Average latency 10.5s,
+p95 35.7s. Adversarial suite: 61/61 blocked, which gates the build — it
+makes no model calls, so it passes under either provider. Ambiguity set: 7% clarification recall at a 0%
 false-positive rate. The model rarely admits uncertainty, but it also
 never asks needlessly.
 
@@ -202,14 +161,13 @@ and makes the SQL editable.
 ## Layout
 
 ```
-db/            schema, seed, roles, audit table, users, history, resets
+db/            schema, seed, roles, audit table, conversation history
 semantic/      business glossary and canonical metric SQL (hand-maintained)
 api/app/
-  auth/        identifiers, password hashing, tokens, route dependencies
   history/     conversation + message persistence
   guards/      the AST guard
   schema/      catalog introspection, DDL rendering, value index
-  llm/         prompts, Ollama client, structured output schema
+  llm/         prompts, provider clients (Ollama / Gemini), output schema
   pipeline/    generate, guard, budget, execute, diagnose, repair loop
   obs/         audit log writes and dashboard queries
   api/         FastAPI routes and the SSE bridge

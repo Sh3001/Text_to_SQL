@@ -19,8 +19,6 @@ from .config import load_env
 load_env()
 
 from .api.routes import router  # noqa: E402
-from .auth.routes import router as auth_router  # noqa: E402
-from .auth.security import jwt_secret  # noqa: E402
 from .history.routes import router as history_router  # noqa: E402
 from .pipeline.generate import build_context  # noqa: E402
 
@@ -37,10 +35,6 @@ CORS_ORIGINS = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Fail at startup, not on the first login attempt: a missing signing
-    # key is a deployment mistake, and it should stop the boot.
-    jwt_secret()
-
     with psycopg.connect(DATABASE_URL) as conn:
         app.state.ctx = build_context(conn)
     # Pending plan_id -> PendingPlan, awaiting approve/reject — in-memory,
@@ -58,6 +52,5 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router)
 app.include_router(history_router)
 app.include_router(router)

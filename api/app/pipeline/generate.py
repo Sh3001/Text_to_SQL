@@ -44,9 +44,12 @@ def build_context(conn: psycopg.Connection) -> PipelineContext:
 def generate_plan(
     ctx: PipelineContext,
     question: str,
-    model: str = client.DEFAULT_MODEL,
+    model: str | None = None,
     repair_attempts: list[RepairAttempt] | None = None,
 ) -> GenerationResult:
+    """`model=None` means "whatever the configured provider defaults to".
+    Binding client.DEFAULT_MODEL as the default here would freeze the
+    Ollama model at import time and quietly ignore LLM_PROVIDER=gemini."""
     hints = extract_value_hints(question, ctx.value_index)
     bundle = prompts.build_prompt(ctx.schema_ddl, question, hints, repair_attempts)
     return client.generate(bundle.system, bundle.user, model=model)
